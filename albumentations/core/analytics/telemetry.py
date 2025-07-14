@@ -1,5 +1,7 @@
 """Telemetry client for tracking anonymous usage statistics."""
 
+from __future__ import annotations
+
 import contextlib
 import time
 from threading import Thread
@@ -10,6 +12,8 @@ from albumentations.core.analytics.collectors import is_ci_environment, is_pytes
 from albumentations.core.analytics.events import ComposeInitEvent
 from albumentations.core.analytics.settings import settings
 from albumentations.core.analytics.user_id import get_user_id_manager
+
+"""Telemetry client for tracking anonymous usage statistics."""
 
 
 class TelemetryClient:
@@ -25,7 +29,7 @@ class TelemetryClient:
     _instance = None
     _initialized = False
 
-    def __new__(cls) -> "TelemetryClient":
+    def __new__(cls) -> TelemetryClient:
         """Create or return the singleton instance."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -51,47 +55,34 @@ class TelemetryClient:
             use_thread: If True, send telemetry in background thread (default)
 
         """
-        if not self.enabled or not telemetry:
+        # Short-circuit checks up front for performance
+        if not self.enabled or not telemetry or not settings.telemetry_enabled:
             return
 
-        # Check global settings
-        if not settings.telemetry_enabled:
-            return
-
-        # Get persistent user ID
         user_id = self.user_id_manager.get_or_create_user_id()
-        if user_id is None:  # User opted out
+        if user_id is None:
             return
 
-        # Deduplication check
         pipeline_hash = compose_data.get("pipeline_hash")
-        if pipeline_hash and pipeline_hash in self.sent_pipelines:
-            return  # Skip if already sent
+        # Early deduplication and rate limiting
+        now = time.time()
+        if (pipeline_hash and pipeline_hash in self.sent_pipelines) or (now - self.last_send_time < self.rate_limit):
+            return
 
-        # Rate limiting check
-        current_time = time.time()
-        if current_time - self.last_send_time < self.rate_limit:
-            return  # Skip if too soon
-
-        # Add user ID to event data
+        # Add user ID and create event object
         compose_data["user_id"] = user_id
-
-        # Create event
         event = ComposeInitEvent(**compose_data)
 
-        # Send event to backend
+        # Actually send event
         if use_thread:
-            # Send in background thread
-            thread = Thread(target=self._send_event_thread, args=(event,), daemon=True)
-            thread.start()
+            Thread(target=self._send_event_thread, args=(event,), daemon=True).start()
         else:
-            # Send synchronously (mainly for testing)
             self._send_event(event)
 
-        # Update tracking
+        # Track pipeline and last send
         if pipeline_hash:
             self.sent_pipelines.add(pipeline_hash)
-        self.last_send_time = current_time
+        self.last_send_time = now
 
     def _send_event_thread(self, event: ComposeInitEvent) -> None:
         """Send event in thread with proper error handling.
@@ -114,16 +105,11 @@ class TelemetryClient:
             True if event was sent successfully, False otherwise
 
         """
-        telemetry_sent = True
         try:
             self.backend.send_event(event)
+            return True
         except (OSError, ValueError):
-            # Silently ignore telemetry errors
-            # OSError: network issues
-            # ValueError: data validation issues
-            telemetry_sent = False
-
-        return telemetry_sent
+            return False
 
     def disable(self) -> None:
         """Disable telemetry collection."""
@@ -154,3 +140,6 @@ def get_telemetry_client() -> TelemetryClient:
     if telemetry_client is None:
         telemetry_client = TelemetryClient()
     return telemetry_client
+
+
+_CACHED_DISABLE_TELEMETRY = is_ci_environment() or is_pytest_running()

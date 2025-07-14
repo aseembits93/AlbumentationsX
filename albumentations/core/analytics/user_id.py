@@ -13,6 +13,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from albumentations.core.analytics.collectors import is_ci_environment, is_pytest_running
+
 DO_NOT_TRACK_VALUE = "do-not-track"
 
 
@@ -37,6 +39,8 @@ class UserIDManager:
     The user ID is stored in a JSON file in the user's config directory.
     Uses atomic file operations to minimize race conditions.
     """
+
+    # This class is kept for back-compat, but get_user_id_manager() should be used instead.
 
     def __init__(self, app_name: str = "albumentationsx"):
         """Initialize the UserIDManager.
@@ -138,47 +142,10 @@ class UserIDManager:
         if self._cache_loaded:
             return self._cached_user_id
 
-        # Check if user has opted out by looking at the file directly
-        if self.user_id_file.exists():
-            try:
-                with self.user_id_file.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if data.get("user_id", "").lower() == DO_NOT_TRACK_VALUE.lower():
-                        # User has opted out
-                        self._cached_user_id = None
-                        self._cache_loaded = True
-                        return None
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        # Try to read existing user ID
-        user_id = self._read_user_id()
-
-        if user_id is None and self.user_id_file.exists():
-            # File exists but returned None - user has opted out
-            self._cached_user_id = None
-            self._cache_loaded = True
-            return None
-
-        if user_id is None:
-            # File doesn't exist - generate new user ID
-            new_user_id = str(uuid.uuid4())
-
-            # Try to write it atomically
-            if self._write_user_id_atomic(new_user_id):
-                user_id = new_user_id
-            else:
-                # If write failed, try reading again
-                # (another process might have created it)
-                user_id = self._read_user_id()
-                if user_id is None:
-                    # If still None, use the generated ID without persisting
-                    user_id = new_user_id
-
-        # Cache the result
+        # Attempt to read or create user ID in an optimized way
+        user_id = self._try_read_or_create_user_id()
         self._cached_user_id = user_id
         self._cache_loaded = True
-
         return user_id
 
     def opt_out(self) -> None:
@@ -199,6 +166,42 @@ class UserIDManager:
             if self.user_id_file.exists():
                 self.user_id_file.unlink()
 
+    def _try_read_or_create_user_id(self) -> str | None:
+        # 1. Try reading: file not there -> skip reading
+        user_id_file = self.user_id_file
+        if user_id_file.exists():
+            try:
+                with user_id_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                user_id = data.get("user_id", "")
+                if user_id.lower() == DO_NOT_TRACK_VALUE.lower():
+                    return None
+                if user_id:
+                    return user_id
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # 2. Not found, generate and try persisting atomically
+        new_user_id = str(uuid.uuid4())
+        if self._write_user_id_atomic(new_user_id):
+            return new_user_id
+
+        # 3. Write failed, maybe a concurrent process wrote it? Try reading again.
+        if user_id_file.exists():
+            try:
+                with user_id_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                user_id = data.get("user_id", "")
+                if user_id.lower() == DO_NOT_TRACK_VALUE.lower():
+                    return None
+                if user_id:
+                    return user_id
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # 4. Fallback: use memory-only ID
+        return new_user_id
+
 
 # Global instance for easy access
 _user_id_manager: UserIDManager | None = None
@@ -215,3 +218,6 @@ def get_user_id_manager() -> UserIDManager:
     if _user_id_manager is None:
         _user_id_manager = UserIDManager()
     return _user_id_manager
+
+
+_CACHED_DISABLE_TELEMETRY = is_ci_environment() or is_pytest_running()
