@@ -150,7 +150,8 @@ def get_telemetry_client() -> TelemetryClient:
         The global TelemetryClient instance
 
     """
-    global telemetry_client  # noqa: PLW0603
-    if telemetry_client is None:
-        telemetry_client = TelemetryClient()
-    return telemetry_client
+    try:
+        return get_telemetry_client._client
+    except AttributeError:
+        get_telemetry_client._client = TelemetryClient()
+        return get_telemetry_client._client
