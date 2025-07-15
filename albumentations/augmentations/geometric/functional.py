@@ -2680,14 +2680,24 @@ def flip_keypoints(
         np.ndarray: The flipped keypoints.
 
     """
+    if not flip_horizontal and not flip_vertical:
+        return keypoints
+
     rows, cols = image_shape[:2]
     flipped_keypoints = keypoints.copy()
+
+    # Flip x coordinate
     if flip_horizontal:
         flipped_keypoints[:, 0] = cols - flipped_keypoints[:, 0]
-        flipped_keypoints[:, 3] = -flipped_keypoints[:, 3]  # Flip angle
+    # Flip y coordinate
     if flip_vertical:
         flipped_keypoints[:, 1] = rows - flipped_keypoints[:, 1]
-        flipped_keypoints[:, 3] = -flipped_keypoints[:, 3]  # Flip angle
+
+    # Determine the angle multiplier: * -1 if odd number of flips
+    n_flips = flip_horizontal + flip_vertical
+    if n_flips % 2 == 1:
+        flipped_keypoints[:, 3] = -flipped_keypoints[:, 3]
+
     return flipped_keypoints
 
 
