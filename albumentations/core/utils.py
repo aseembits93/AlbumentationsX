@@ -21,6 +21,15 @@ from albumentations.core.label_manager import LabelManager
 from .serialization import Serializable
 from .type_definitions import PAIR, Number
 
+"""Module containing utility functions and classes for the core Albumentations framework.
+
+This module provides a collection of helper functions and base classes used throughout
+the Albumentations library. It includes utilities for shape handling, parameter processing,
+data conversion, and serialization. The module defines abstract base classes for data
+processors that implement the conversion logic between different data formats used in
+the transformation pipeline.
+"""
+
 
 def get_shape(data: dict[str, Any]) -> tuple[int, int]:
     """Extract height and width dimensions from input data dictionary.
@@ -133,14 +142,15 @@ def _get_shape_from_volume(vol: np.ndarray) -> tuple[int, int]:
 def _get_shape_from_volumes(vols: np.ndarray) -> tuple[int, int]:
     """Extract shape from a batch of volumes."""
     # Check if it's a torch tensor batch
-    if _is_torch_tensor(vols):
-        # PyTorch 3D tensor batch in NCDHW format
-        if len(vols.shape) == 5:  # (N, C, D, H, W)
-            return int(vols.shape[3]), int(vols.shape[4])
-        if len(vols.shape) == 4:  # (N, D, H, W) - grayscale volume batch without channel
-            return int(vols.shape[2]), int(vols.shape[3])
+    if hasattr(vols, "__module__") and "torch" in vols.__module__:
+        shape = vols.shape
+        if len(shape) == 5:  # PyTorch 3D tensor batch in NCDHW format (N, C, D, H, W)
+            return shape[3], shape[4]
+        if len(shape) == 4:  # (N, D, H, W) - grayscale volume batch without channel
+            return shape[2], shape[3]
     # Regular numpy array batch in NDHWC format - take first volume
-    return vols[0].shape[1], vols[0].shape[2]
+    s = vols[0].shape
+    return s[1], s[2]
 
 
 def format_args(args_dict: dict[str, Any]) -> str:
