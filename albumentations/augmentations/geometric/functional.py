@@ -238,15 +238,24 @@ def resize(
         np.ndarray: Resized image with shape target_shape + original channel dimensions.
 
     """
-    if target_shape == img.shape[:2]:
+    img_shape_hw = img.shape[:2]
+    if target_shape == img_shape_hw:
         return img
 
-    height, width = target_shape[:2]
-    resize_fn = maybe_process_in_chunks(
-        cv2.resize,
-        dsize=(width, height),
-        interpolation=interpolation,
-    )
+    # Avoid function call overhead in the most common case (process whole image directly).
+    if not hasattr(resize, "_resize_fn_cache"):
+        resize._resize_fn_cache = {}
+
+    cache_key = (interpolation, target_shape)
+    resize_fn = resize._resize_fn_cache.get(cache_key)
+    if resize_fn is None:
+        resize_fn = maybe_process_in_chunks(
+            cv2.resize,
+            dsize=(target_shape[1], target_shape[0]),
+            interpolation=interpolation,
+        )
+        resize._resize_fn_cache[cache_key] = resize_fn
+
     return resize_fn(img)
 
 
