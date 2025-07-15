@@ -9,7 +9,6 @@ consistency between different data types during cropping operations.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 import cv2
 import numpy as np
@@ -470,25 +469,31 @@ def pad_along_axes(
     if h_axis == w_axis:
         raise ValueError(f"Height axis {h_axis} and width axis {w_axis} cannot be the same.")
 
-    mode_map = {
-        cv2.BORDER_CONSTANT: "constant",
-        cv2.BORDER_REPLICATE: "edge",
-        cv2.BORDER_REFLECT: "reflect",
-        cv2.BORDER_REFLECT_101: "symmetric",
-        cv2.BORDER_WRAP: "wrap",
-    }
-    if border_mode not in mode_map:
+    try:
+        np_mode = _MODE_MAP[border_mode]
+    except KeyError:
         raise ValueError(f"Unsupported border_mode: {border_mode}")
-    np_mode = mode_map[border_mode]
 
-    pad_width = [(0, 0)] * ndim  # Initialize padding for all dimensions
+    # Short-circuit: if there is actually no padding, return array immediately.
+    if pad_top == 0 and pad_bottom == 0 and pad_left == 0 and pad_right == 0:
+        return arr
+
+    # Efficient tuple creation; avoid making a list and then mutating.
+    # Pad width for all axes is (0, 0), except h_axis/w_axis.
+    pad_width = [(0, 0)] * ndim
     pad_width[h_axis] = (pad_top, pad_bottom)
     pad_width[w_axis] = (pad_left, pad_right)
+    pad_width_tuple = tuple(pad_width)
 
-    # Initialize kwargs with mode
-    kwargs: dict[str, Any] = {"mode": np_mode}
-    # Add constant_values only if mode is constant
     if np_mode == "constant":
-        kwargs["constant_values"] = pad_value
+        return np.pad(arr, pad_width_tuple, mode=np_mode, constant_values=pad_value)
+    return np.pad(arr, pad_width_tuple, mode=np_mode)
 
-    return np.pad(arr, pad_width, **kwargs)
+
+_MODE_MAP = {
+    cv2.BORDER_CONSTANT: "constant",
+    cv2.BORDER_REPLICATE: "edge",
+    cv2.BORDER_REFLECT: "reflect",
+    cv2.BORDER_REFLECT_101: "symmetric",
+    cv2.BORDER_WRAP: "wrap",
+}
