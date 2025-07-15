@@ -1426,20 +1426,17 @@ def keypoints_transpose(keypoints: np.ndarray) -> np.ndarray:
         np.ndarray: Transposed keypoints
 
     """
-    transposed_keypoints = keypoints.copy()
+    # Fastest: Allocate result array directly and fill it efficiently
+    result = keypoints.copy()
+    # Swap x and y in one shot for all rows
+    result[:, 0], result[:, 1] = keypoints[:, 1], keypoints[:, 0]
 
-    # Swap x and y coordinates
-    transposed_keypoints[:, [0, 1]] = keypoints[:, [1, 0]]
+    # Adjust angles where present (assumed index 3 always exists)
+    # Use in-place operation for maximum speed
+    a = keypoints[:, 3]
+    result[:, 3] = np.where(a <= np.pi, np.pi / 2 - a, 3 * np.pi / 2 - a)
 
-    # Adjust angles to reflect the coordinate swap
-    angles = keypoints[:, 3]
-    transposed_keypoints[:, 3] = np.where(
-        angles <= np.pi,
-        np.pi / 2 - angles,
-        3 * np.pi / 2 - angles,
-    )
-
-    return transposed_keypoints
+    return result
 
 
 @preserve_channel_dim
