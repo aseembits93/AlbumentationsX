@@ -3379,12 +3379,13 @@ def get_dimension_padding(
         tuple[int, int]: (pad_before, pad_after)
 
     """
-    if min_size is not None:
-        if current_size < min_size:
-            pad_before = int((min_size - current_size) / 2.0)
-            pad_after = min_size - current_size - pad_before
-            return pad_before, pad_after
-    elif divisor is not None:
+    if min_size is not None and current_size < min_size:
+        total_pad = min_size - current_size
+        pad_before = total_pad // 2
+        pad_after = total_pad - pad_before
+        return pad_before, pad_after
+
+    if divisor is not None:
         remainder = current_size % divisor
         if remainder > 0:
             total_pad = divisor - remainder
