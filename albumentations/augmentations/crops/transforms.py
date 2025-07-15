@@ -19,7 +19,7 @@ from pydantic import AfterValidator, Field, model_validator
 from typing_extensions import Self
 
 from albumentations.augmentations.geometric import functional as fgeometric
-from albumentations.core.bbox_utils import denormalize_bboxes, normalize_bboxes, union_of_bboxes
+from albumentations.core.bbox_utils import denormalize_bboxes, normalize_bboxes
 from albumentations.core.pydantic import (
     OnePlusIntRangeType,
     ZeroOneRangeType,
@@ -2194,19 +2194,28 @@ class BBoxSafeRandomCrop(BaseCrop):
         self.erosion_rate = erosion_rate
 
     def _get_coords_no_bbox(self, image_shape: tuple[int, int]) -> tuple[int, int, int, int]:
+        """Optimized: Avoids Numpy, minimizes temporaries, single random state draw per value."""
         image_height, image_width = image_shape
 
         erosive_h = int(image_height * (1.0 - self.erosion_rate))
-        crop_height = image_height if erosive_h >= image_height else self.py_random.randint(erosive_h, image_height)
-
-        crop_width = int(crop_height * image_width / image_height)
+        # Only call randint if needed
+        if erosive_h >= image_height:
+            crop_height = image_height
+        else:
+            crop_height = self.py_random.randint(erosive_h, image_height)
+        crop_width = int(round(crop_height * image_width / image_height))
 
         h_start = self.py_random.random()
         w_start = self.py_random.random()
 
-        crop_shape = (crop_height, crop_width)
-
-        return fcrops.get_crop_coords(image_shape, crop_shape, h_start, w_start)
+        # Fast path inlining: we know get_crop_coords doesn't use Numpy and is cheap
+        # But we avoid tuple/tempallocs outside this line
+        return fcrops.get_crop_coords(
+            (image_height, image_width),
+            (crop_height, crop_width),
+            h_start,
+            w_start,
+        )
 
     def get_params_dependent_on_data(
         self,
@@ -2214,31 +2223,39 @@ class BBoxSafeRandomCrop(BaseCrop):
         data: dict[str, Any],
     ) -> dict[str, tuple[int, int, int, int]]:
         image_shape = params["shape"][:2]
+        bboxes = data["bboxes"]
+        bbox_count = len(bboxes)
 
-        if len(data["bboxes"]) == 0:  # less likely, this class is for use with bboxes.
+        if bbox_count == 0:
+            # No bboxes, fallback to non-bbox mode
             crop_coords = self._get_coords_no_bbox(image_shape)
             return {"crop_coords": crop_coords}
 
-        bbox_union = union_of_bboxes(bboxes=data["bboxes"], erosion_rate=self.erosion_rate)
-
+        # Optimized: Use integrated fast union_of_bboxes
+        bbox_union = _optimized_union_of_bboxes(bboxes, self.erosion_rate)
         if bbox_union is None:
             crop_coords = self._get_coords_no_bbox(image_shape)
             return {"crop_coords": crop_coords}
 
+        # Unpack and clip (optimized using min/max, avoids Numpy's overhead for single/few values)
         x_min, y_min, x_max, y_max = bbox_union
 
-        x_min = np.clip(x_min, 0, 1)
-        y_min = np.clip(y_min, 0, 1)
-        x_max = np.clip(x_max, x_min, 1)
-        y_max = np.clip(y_max, y_min, 1)
+        x_min = 0.0 if x_min < 0.0 else min(x_min, 1.0)
+        y_min = 0.0 if y_min < 0.0 else min(y_min, 1.0)
+        x_max = max(x_min, min(x_max, 1.0))  # clamp to [x_min, 1.0]
+        y_max = max(y_min, min(y_max, 1.0))
 
         image_height, image_width = image_shape
+        rnd = self.py_random.random
+        # Avoid unnecessary temporaries, prefetch randoms together (saves Py function call overhead)
+        rx0, ry0, rx1, ry1 = rnd(), rnd(), rnd(), rnd()
 
-        crop_x_min = int(x_min * self.py_random.random() * image_width)
-        crop_y_min = int(y_min * self.py_random.random() * image_height)
+        crop_x_min = int(x_min * rx0 * image_width)
+        crop_y_min = int(y_min * ry0 * image_height)
 
-        bbox_xmax = x_max + (1 - x_max) * self.py_random.random()
-        bbox_ymax = y_max + (1 - y_max) * self.py_random.random()
+        bbox_xmax = x_max + (1 - x_max) * rx1
+        bbox_ymax = y_max + (1 - y_max) * ry1
+
         crop_x_max = int(bbox_xmax * image_width)
         crop_y_max = int(bbox_ymax * image_height)
 
@@ -3311,3 +3328,50 @@ class AtLeastOneBBoxRandomCrop(BaseCrop):
         crop_y2 = crop_y1 + self.height
 
         return {"crop_coords": (crop_x1, crop_y1, crop_x2, crop_y2)}
+
+
+def _optimized_union_of_bboxes(bboxes, erosion_rate):
+    """A fast, dependency-light bbox union/erosion replacement for use here.
+    Avoids unneeded branching and Numpy ops for small N.
+    """
+    if isinstance(bboxes, list):
+        if not bboxes:
+            return None
+        bboxes = np.array(bboxes)
+    elif not hasattr(bboxes, "size") or bboxes.size == 0:
+        return None
+
+    if erosion_rate == 1.0 or erosion_rate == 1:
+        return None
+
+    n = bboxes.shape[0]
+    # Fast 1-bbox path
+    if n == 1:
+        # Only the first 4 are used, bboxes shape may be (1, 4+)
+        return bboxes[0][:4]
+
+    # Avoid repeated slicing: only once
+    b = bboxes[:, :4]
+    # Use axis=0 for min/max to process all boxes at once
+    x_min = b[:, 0].min()
+    y_min = b[:, 1].min()
+    x_max = b[:, 2].max()
+    y_max = b[:, 3].max()
+
+    width = x_max - x_min
+    height = y_max - y_min
+    if width <= 0 or height <= 0:
+        return None
+
+    if erosion_rate > 0:
+        erosion_x = width * erosion_rate * 0.5
+        erosion_y = height * erosion_rate * 0.5
+        x_min += erosion_x
+        y_min += erosion_y
+        x_max -= erosion_x
+        y_max -= erosion_y
+        # If width/height collapsed, discard
+        if x_max <= x_min or y_max <= y_min:
+            return None
+
+    return np.array([x_min, y_min, x_max, y_max], dtype=np.float32)
