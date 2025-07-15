@@ -523,8 +523,17 @@ def process_scalar(param: Number, low: Number | None) -> tuple[Number, Number]:
             - If low is None: (-param, param) creating a symmetric range around zero
 
     """
-    if isinstance(low, Real):
+    # First check for common fast types (int, float), since isinstance is expensive
+    # Fallback to original isinstance for other Real derivatives
+    tl = type(low)
+    if tl is int or tl is float:
         return (low, param) if low < param else (param, low)
+    if low is not None:
+        # Only import and check Real if needed
+        from numbers import Real
+
+        if isinstance(low, Real):
+            return (low, param) if low < param else (param, low)
     return -param, param
 
 
