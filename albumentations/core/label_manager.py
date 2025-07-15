@@ -33,7 +33,10 @@ def custom_sort(item: Any) -> tuple[int, Real | str]:
             and the value itself (or string representation for non-numeric values).
 
     """
-    return (0, item) if isinstance(item, Real) else (1, str(item))
+    # Faster numeric check and avoid unnecessary str() calls for performance
+    if isinstance(item, (int, float)):
+        return (0, item)
+    return (1, str(item))
 
 
 def _categorize_labels(labels: set[Any]) -> tuple[list[Real], list[str]]:
