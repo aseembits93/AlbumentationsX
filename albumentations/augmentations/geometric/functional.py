@@ -39,6 +39,13 @@ from albumentations.core.type_definitions import (
     REFLECT_BORDER_MODES,
 )
 
+"""Functional implementations of geometric image transformations.
+
+This module provides low-level functions for geometric operations such as rotation,
+resizing, flipping, perspective transforms, and affine transformations on images,
+bounding boxes and keypoints.
+"""
+
 PAIR = 2
 
 ROT90_180_FACTOR = 2
@@ -548,6 +555,20 @@ def is_identity_matrix(matrix: np.ndarray) -> bool:
         bool: True if the matrix is an identity matrix, False otherwise.
 
     """
+    # Fast-path for common float32/float64 matrices:
+    if matrix.shape == (3, 3):
+        # Avoid allocating a new matrix if possible
+        return (
+            matrix[0, 0] == 1
+            and matrix[0, 1] == 0
+            and matrix[0, 2] == 0
+            and matrix[1, 0] == 0
+            and matrix[1, 1] == 1
+            and matrix[1, 2] == 0
+            and matrix[2, 0] == 0
+            and matrix[2, 1] == 0
+            and matrix[2, 2] == 1
+        )
     return np.allclose(matrix, np.eye(3, dtype=matrix.dtype))
 
 
@@ -618,19 +639,39 @@ def warp_affine(
     if is_identity_matrix(matrix):
         return image
 
-    height = int(np.round(output_shape[0]))
-    width = int(np.round(output_shape[1]))
-
+    # Directly cast shape to int
+    height, width = int(output_shape[0]), int(output_shape[1])
     cv2_matrix = matrix[:2, :]
 
-    warp_fn = maybe_process_in_chunks(
-        warp_affine_with_value_extension,
-        matrix=cv2_matrix,
-        dsize=(width, height),
-        flags=interpolation,
-        border_mode=border_mode,
-        border_value=fill,
-    )
+    # Optimization: move get_num_channels and extend_value out of warp_affine_with_value_extension
+    # for the batch case by providing a closure if chunk processing is asked for.
+    # (Assuming maybe_process_in_chunks gives us a vectorized loop over images if necessary.)
+    if getattr(image, "__iter__", False) and hasattr(image, "shape") and len(image.shape) > 0 and image.shape[0] > 1:
+        # Likely a batch, compute once for all:
+        num_channels = get_num_channels(image[0])
+        extended_value = extend_value(fill, num_channels)
+        warp_fn = _prepare_warp_affine_with_value_extension(
+            cv2_matrix,
+            (width, height),
+            interpolation,
+            border_mode,
+            extended_value,
+        )
+    else:
+        # Single image and/or maybe_process_in_chunks expects call like before:
+        def warp_fn(img):
+            num_channels = get_num_channels(img)
+            extended_value = extend_value(fill, num_channels)
+            return cv2.warpAffine(
+                img,
+                cv2_matrix,
+                (width, height),
+                flags=interpolation,
+                borderMode=border_mode,
+                borderValue=extended_value,
+            )
+
+    warp_fn = maybe_process_in_chunks(warp_fn)
     return warp_fn(image)
 
 
@@ -4131,3 +4172,19 @@ def d4_images(img: np.ndarray, group_member: Literal["e", "r90", "r180", "r270",
     """
     # Execute the appropriate transformation
     return D4_TRANSFORMATIONS_IMAGES[group_member](img)
+
+
+def _prepare_warp_affine_with_value_extension(matrix, dsize, flags, border_mode, extended_value):
+    """Return a function closure over extended_value, avoiding redundant recomputation per image."""
+
+    def fn(image):
+        return cv2.warpAffine(
+            image,
+            matrix,
+            dsize,
+            flags=flags,
+            borderMode=border_mode,
+            borderValue=extended_value,
+        )
+
+    return fn
