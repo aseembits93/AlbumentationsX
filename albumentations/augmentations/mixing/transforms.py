@@ -537,18 +537,18 @@ class Mosaic(DualTransform):
         metadata_key: str = "mosaic_metadata",
         p: float = 0.5,
     ) -> None:
+        # Store required parameters as local vars before calling super().__init__ for faster initialization
         super().__init__(p=p)
         self.grid_yx = grid_yx
         self.target_size = target_size
-
-        self.metadata_key = metadata_key
+        self.cell_shape = cell_shape
         self.center_range = center_range
+        self.fit_mode = fit_mode
         self.interpolation = interpolation
         self.mask_interpolation = mask_interpolation
         self.fill = fill
         self.fill_mask = fill_mask
-        self.fit_mode = fit_mode
-        self.cell_shape = cell_shape
+        self.metadata_key = metadata_key
 
     @property
     def targets_as_params(self) -> list[str]:
@@ -654,17 +654,18 @@ class Mosaic(DualTransform):
             fmixing.ProcessedMosaicItem: A copy of the primary data.
 
         """
+        img = data["image"]
         mask = data.get("mask")
-        if mask is not None:
-            mask = mask.copy()
         bboxes = data.get("bboxes")
-        if bboxes is not None:
-            bboxes = bboxes.copy()
         keypoints = data.get("keypoints")
-        if keypoints is not None:
-            keypoints = keypoints.copy()
+
+        # Only call copy() if data exists, using short-circuiting assignment
+        mask = mask.copy() if mask is not None else None
+        bboxes = bboxes.copy() if bboxes is not None else None
+        keypoints = keypoints.copy() if keypoints is not None else None
+
         return {
-            "image": data["image"],
+            "image": img,
             "mask": mask,
             "bboxes": bboxes,
             "keypoints": keypoints,
