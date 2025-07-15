@@ -810,19 +810,37 @@ def bboxes_from_masks(masks: np.ndarray) -> np.ndarray:
     # Handle single mask case by adding batch dimension
     if len(masks.shape) == MONO_CHANNEL_DIMENSIONS:
         masks = masks[np.newaxis, ...]
-
+    n, h, w = masks.shape
+    # Find foreground row/col indices per mask
+    # This produces (n, h) and (n, w) bool arrays
     rows = np.any(masks, axis=2)
     cols = np.any(masks, axis=1)
 
-    bboxes = np.zeros((masks.shape[0], 4), dtype=np.int32)
+    # Mask with no positive pixels
+    none_rows = ~rows.any(axis=1)
+    none_cols = ~cols.any(axis=1)
+    none_mask = none_rows | none_cols
 
-    for i, (row, col) in enumerate(zip(rows, cols)):
-        if not np.any(row) or not np.any(col):
-            bboxes[i] = [-1, -1, -1, -1]
-        else:
-            y_min, y_max = np.where(row)[0][[0, -1]]
-            x_min, x_max = np.where(col)[0][[0, -1]]
-            bboxes[i] = [x_min, y_min, x_max + 1, y_max + 1]
+    # Initialize to default invalid
+    bboxes = np.full((n, 4), -1, dtype=np.int32)
+
+    # Only process valid masks
+    valid_idx = ~none_mask
+    if np.count_nonzero(valid_idx):
+        valid_rows = rows[valid_idx]
+        valid_cols = cols[valid_idx]
+
+        # For each mask, get y_min/y_max/x_min/x_max
+        # np.argmax yields first True; flip array for last True
+        y_min = np.argmax(valid_rows, axis=1)
+        y_max = valid_rows.shape[1] - 1 - np.argmax(valid_rows[:, ::-1], axis=1)
+        x_min = np.argmax(valid_cols, axis=1)
+        x_max = valid_cols.shape[1] - 1 - np.argmax(valid_cols[:, ::-1], axis=1)
+
+        bboxes[valid_idx, 0] = x_min
+        bboxes[valid_idx, 1] = y_min
+        bboxes[valid_idx, 2] = x_max + 1
+        bboxes[valid_idx, 3] = y_max + 1
 
     return bboxes
 
@@ -839,13 +857,19 @@ def masks_from_bboxes(bboxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
 
     """
     height, width = shape[:2]
-
-    masks = np.zeros((len(bboxes), height, width), dtype=np.uint8)
-    y, x = np.ogrid[:height, :width]
-
-    for i, (x_min, y_min, x_max, y_max) in enumerate(bboxes[:, :4].astype(int)):
-        masks[i] = (x_min <= x) & (x < x_max) & (y_min <= y) & (y < y_max)
-
+    N = bboxes.shape[0]
+    masks = np.zeros((N, height, width), dtype=np.uint8)
+    # Slice assignment for all at once
+    boxes = bboxes[:, :4].astype(int)
+    x_min = boxes[:, 0]
+    y_min = boxes[:, 1]
+    x_max = boxes[:, 2]
+    y_max = boxes[:, 3]
+    # Filter out invalid boxes (min=-1, as set by bbox_from_masks)
+    valid_mask = (x_min >= 0) & (y_min >= 0) & (x_max > x_min) & (y_max > y_min)
+    idxs = np.where(valid_mask)[0]
+    for i in idxs:
+        masks[i, y_min[i] : y_max[i], x_min[i] : x_max[i]] = 1
     return masks
 
 
