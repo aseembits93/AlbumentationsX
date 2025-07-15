@@ -88,7 +88,8 @@ def get_volume_shape(data: dict[str, Any]) -> tuple[int, int, int] | None:
 
 def _is_torch_tensor(obj: Any) -> bool:
     """Check if an object is a PyTorch tensor."""
-    return hasattr(obj, "__module__") and "torch" in obj.__module__
+    mod = getattr(obj, "__module__", None)
+    return mod is not None and "torch" in mod
 
 
 def _get_shape_from_image(img: np.ndarray) -> tuple[int, int]:
@@ -106,15 +107,16 @@ def _get_shape_from_image(img: np.ndarray) -> tuple[int, int]:
 
 def _get_shape_from_images(imgs: np.ndarray) -> tuple[int, int]:
     """Extract shape from a batch of images."""
-    # Check if it's a torch tensor batch
+    # Check if it's a torch tensor batch, process by expected shapes
     if _is_torch_tensor(imgs):
-        # PyTorch tensor batch in NCHW format
-        if len(imgs.shape) == 4:  # (N, C, H, W)
-            return int(imgs.shape[2]), int(imgs.shape[3])
-        if len(imgs.shape) == 3:  # (N, H, W) - grayscale batch without channel
-            return int(imgs.shape[1]), int(imgs.shape[2])
-    # Regular numpy array batch in NHWC format - take first image
-    return imgs[0].shape[0], imgs[0].shape[1]
+        shape = imgs.shape
+        if len(shape) == 4:  # (N, C, H, W)
+            return shape[2], shape[3]
+        if len(shape) == 3:  # (N, H, W)
+            return shape[1], shape[2]
+    # For numpy batches (assumed NHWC or similar), return first two dims
+    h, w = imgs[0].shape[:2]
+    return h, w
 
 
 def _get_shape_from_volume(vol: np.ndarray) -> tuple[int, int]:
