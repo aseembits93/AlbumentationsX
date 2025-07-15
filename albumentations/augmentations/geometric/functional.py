@@ -1268,12 +1268,16 @@ def transpose_volumes(volumes: np.ndarray) -> np.ndarray:
             - (N, D, W, H, C) for multi-channel volumes
 
     """
-    # Generate the new axes order
+    # Use precomputed axes order for maximum speed, avoid reconstructing each time
+    if volumes.ndim == 4:
+        # (N, D, H, W) -> (N, D, W, H)
+        return volumes.transpose(0, 1, 3, 2)
+    if volumes.ndim == 5:
+        # (N, D, H, W, C) -> (N, D, W, H, C)
+        return volumes.transpose(0, 1, 3, 2, 4)
+    # Fallback to slower dynamic method for wrong shapes, unchanged logic
     new_axes = list(range(volumes.ndim))
-    # Swap dimensions 2 and 3 (Height and Width), preserving batch, depth and channels
     new_axes[2], new_axes[3] = 3, 2
-
-    # Transpose the array using the new axes order
     return volumes.transpose(new_axes)
 
 
