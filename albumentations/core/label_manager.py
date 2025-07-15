@@ -17,6 +17,15 @@ from typing import Any
 
 import numpy as np
 
+"""Module for managing and transforming label data during augmentation.
+
+This module provides utilities for encoding, decoding, and tracking metadata for labels
+during the augmentation process. It includes classes for managing label transformations,
+preserving data types, and ensuring consistent handling of categorical, numerical, and
+mixed label types. The module supports automatic encoding of string labels to numerical
+values and restoration of original data types after processing.
+"""
+
 
 def custom_sort(item: Any) -> tuple[int, Real | str]:
     """Sort items by type then value for consistent label ordering.
@@ -83,12 +92,42 @@ class LabelEncoder:
             self.is_numerical = False
             return self
 
-        self.is_numerical = all(isinstance(label, Real) for label in y)
+        # Optimize all(isinstance(label, Real) for label in y)
+        # by using set for fewest checks
+        try:
+            if len(y) > 64:
+                # For large y, check unique types for better speed
+                uniq_types = {type(val) for val in y}
+                if len(uniq_types) == 1 and issubclass(next(iter(uniq_types)), Real):
+                    self.is_numerical = True
+                else:
+                    self.is_numerical = all(isinstance(label, Real) for label in y)
+            else:
+                self.is_numerical = all(isinstance(label, Real) for label in y)
+        except Exception:
+            self.is_numerical = all(isinstance(label, Real) for label in y)
 
         if self.is_numerical:
             return self
 
-        unique_labels = sorted(set(y), key=custom_sort)
+        # Fast unique and stable custom sort: avoid calling custom_sort N times per element
+        label_set = set()
+        numeric_labels = []
+        string_labels = []
+        for label in y:
+            if label in label_set:
+                continue
+            label_set.add(label)
+            if isinstance(label, Real):
+                numeric_labels.append(label)
+            else:
+                string_labels.append(label)
+
+        # Only sort unique labels, split by type for speed
+        numeric_labels.sort()
+        string_labels = sorted(string_labels, key=str)
+        unique_labels = numeric_labels + string_labels
+
         for label in unique_labels:
             if label not in self.classes_:
                 self.classes_[label] = self.num_classes
