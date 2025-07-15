@@ -312,17 +312,22 @@ class LabelManager:
 
     def _restore_type(self, decoded_data: np.ndarray, metadata: LabelMetadata) -> Any:
         """Restore data to its original type."""
-        # If original input was a list or sequence, convert back to list
-        if isinstance(metadata.input_type, type) and issubclass(metadata.input_type, (list, Sequence)):
-            return decoded_data.tolist()
+        # Cache values to avoid repeated lookups
+        input_type = metadata.input_type
+        dtype = metadata.dtype
 
-        # If original input was a numpy array, restore original dtype
-        if isinstance(metadata.input_type, type) and issubclass(metadata.input_type, np.ndarray):
-            if metadata.dtype is not None:
-                return decoded_data.astype(metadata.dtype)
-            return decoded_data
+        # Fast path: check for numpy array first (most specific, cheapest to check)
+        if type(input_type) is type:
+            if issubclass(input_type, np.ndarray):
+                # If dtype specified, convert and return. Otherwise, return as is.
+                if dtype is not None:
+                    return decoded_data.astype(dtype)
+                return decoded_data
+            # Check for list and generic sequence types
+            if issubclass(input_type, list) or issubclass(input_type, Sequence):
+                return decoded_data.tolist()
 
-        # For any other type, convert to list by default
+        # Default: convert to list
         return decoded_data.tolist()
 
     def handle_empty_data(self) -> list[Any]:
