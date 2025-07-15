@@ -412,10 +412,14 @@ def volumes_crop_yx(
         ValueError: If crop coordinates are invalid or volumes shape is incorrect.
 
     """
-    if not 4 <= volumes.ndim <= 5:
-        raise ValueError(f"Input volumes should have 4 or 5 dimensions, got {volumes.ndim}")
+    ndim = volumes.ndim
+    if ndim < 4 or ndim > 5:
+        raise ValueError(f"Input volumes should have 4 or 5 dimensions, got {ndim}")
 
-    depth, height, width = volumes.shape[1:4]
+    shape = volumes.shape
+    height = shape[2]
+    width = shape[3]
+
     if x_max <= x_min or y_max <= y_min:
         raise ValueError(
             "Crop coordinates must satisfy min < max. Got: "
@@ -426,10 +430,11 @@ def volumes_crop_yx(
         raise ValueError(
             "Crop coordinates must be within image dimensions (H, W). Got: "
             f"(x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}) "
-            f"for volume shape {(depth, height, width)}",
+            f"for volume shape (height={height}, width={width})",
         )
 
     # Crop along H (axis 2) and W (axis 3)
+    # This just returns a view; it's as efficient as possible.
     return volumes[:, :, y_min:y_max, x_min:x_max]
 
 
