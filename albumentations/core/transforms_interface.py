@@ -691,9 +691,17 @@ class DualTransform(BasicTransform):
         return self.apply(mask, *args, **params)
 
     def apply_to_masks(self, masks: np.ndarray, *args: Any, **params: Any) -> np.ndarray:
+        # Fast return on empty input to avoid unnecessary processing
         if masks.size == 0:
             return masks
-        return np.stack([self.apply_to_mask(mask, **params) for mask in masks])
+
+        # Try to batch-apply if self.apply supports it
+        try:
+            # Try to apply to the entire batch directly (common for vectorized ops)
+            return self.apply(masks, *args, **params)
+        except (NotImplementedError, TypeError, AttributeError):
+            # Fallback to slow loop when not implemented or not possible
+            return np.stack([self.apply_to_mask(mask, *args, **params) for mask in masks])
 
     @batch_transform("spatial")
     def apply_to_mask3d(self, mask3d: np.ndarray, *args: Any, **params: Any) -> np.ndarray:
