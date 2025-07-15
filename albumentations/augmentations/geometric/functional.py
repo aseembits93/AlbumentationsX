@@ -416,24 +416,34 @@ def perspective_bboxes(
 
     """
     height, width = image_shape[:2]
-    transformed_bboxes = bboxes.copy()
-    denormalized_coords = denormalize_bboxes(bboxes[:, :4], image_shape)
+    bboxes_coords = denormalize_bboxes(bboxes[:, :4], image_shape).astype(np.float32, copy=False)
+    nb = bboxes_coords.shape[0]
 
-    x_min, y_min, x_max, y_max = denormalized_coords.T
-    points = np.array(
-        [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]],
-    ).transpose(2, 0, 1)
-    points_reshaped = points.reshape(-1, 1, 2)
+    # Prepare corners, shape: (nb, 4, 2)
+    corners = np.empty((nb, 4, 2), dtype=np.float32)
+    corners[:, 0, 0] = bboxes_coords[:, 0]  # x_min
+    corners[:, 0, 1] = bboxes_coords[:, 1]  # y_min
+    corners[:, 1, 0] = bboxes_coords[:, 2]  # x_max
+    corners[:, 1, 1] = bboxes_coords[:, 1]  # y_min
+    corners[:, 2, 0] = bboxes_coords[:, 2]  # x_max
+    corners[:, 2, 1] = bboxes_coords[:, 3]  # y_max
+    corners[:, 3, 0] = bboxes_coords[:, 0]  # x_min
+    corners[:, 3, 1] = bboxes_coords[:, 3]  # y_max
 
-    transformed_points = cv2.perspectiveTransform(
-        points_reshaped.astype(np.float32),
-        matrix,
-    )
-    transformed_points = transformed_points.reshape(-1, 4, 2)
+    corners = corners.reshape(-1, 1, 2)
 
-    new_coords = np.array(
-        [[np.min(box[:, 0]), np.min(box[:, 1]), np.max(box[:, 0]), np.max(box[:, 1])] for box in transformed_points],
-    )
+    # Perspective transform all corners at once
+    transformed_corners = cv2.perspectiveTransform(corners, matrix)
+    transformed_corners = transformed_corners.reshape(nb, 4, 2)
+
+    # Find new box by mins and maxs along axes
+    x_coords = transformed_corners[:, :, 0]
+    y_coords = transformed_corners[:, :, 1]
+    new_coords = np.empty_like(bboxes_coords)
+    new_coords[:, 0] = np.minimum.reduce(x_coords, axis=1)
+    new_coords[:, 1] = np.minimum.reduce(y_coords, axis=1)
+    new_coords[:, 2] = np.maximum.reduce(x_coords, axis=1)
+    new_coords[:, 3] = np.maximum.reduce(y_coords, axis=1)
 
     if keep_size:
         scale_x, scale_y = width / max_width, height / max_height
@@ -442,11 +452,13 @@ def perspective_bboxes(
         output_shape = image_shape
     else:
         output_shape = (max_height, max_width)
-
+    # Only normalize the new coordinates, preserve extra columns
     normalized_coords = normalize_bboxes(new_coords, output_shape)
-    transformed_bboxes[:, :4] = normalized_coords
 
-    return transformed_bboxes
+    # Build output: copy in one go - only update first 4 columns
+    out = bboxes.copy()
+    out[:, :4] = normalized_coords
+    return out
 
 
 def rotation2d_matrix_to_euler_angles(matrix: np.ndarray, y_up: bool) -> float:
