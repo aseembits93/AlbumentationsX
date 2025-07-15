@@ -3997,8 +3997,23 @@ def rot90_volumes(volumes: np.ndarray, factor: Literal[0, 1, 2, 3]) -> np.ndarra
         np.ndarray: Rotated batch of volumes.
 
     """
-    # Axes 2 (height) and 3 (width) for rotation
-    return np.rot90(volumes, k=factor, axes=(2, 3))
+    # NOTE: Use fast permutations and flips instead of np.rot90 for substantial speedup.
+    k = factor % 4
+    if k == 0:
+        return volumes
+    if k == 1:
+        # Transpose H and W, then flip along new H axis
+        axes = list(range(volumes.ndim))
+        axes[2], axes[3] = axes[3], axes[2]
+        return np.flip(volumes.transpose(axes), axis=2)
+    if k == 2:
+        # Flip H and W
+        return np.flip(np.flip(volumes, axis=2), axis=3)
+    # k == 3
+    # Transpose H and W, then flip along new W axis
+    axes = list(range(volumes.ndim))
+    axes[2], axes[3] = axes[3], axes[2]
+    return np.flip(volumes.transpose(axes), axis=3)
 
 
 @preserve_channel_dim
