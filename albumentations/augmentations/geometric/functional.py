@@ -2319,13 +2319,34 @@ def distort_image_keypoints(
         np.ndarray: The distorted keypoints.
 
     """
+    # If keypoints are empty, just return immediately (the decorator will handle this case)
+
+    # Copy as in the original for return value
     distorted_keypoints = keypoints.copy()
     height, width = image_shape[:2]
 
-    for mesh in generated_mesh:
-        x1, y1, x2, y2 = mesh[:4]  # Source rectangle
-        dst_quad = mesh[4:].reshape(4, 2)  # Destination quadrilateral
+    # For speed, access ref columns only once
+    keypoints_x = keypoints[:, 0]
+    keypoints_y = keypoints[:, 1]
 
+    # Rather than making a mask for every keypoint for every mesh,
+    # we process the meshes one by one but update only affected keypoints.
+    for mesh in generated_mesh:
+        x1, y1, x2, y2 = mesh[:4]
+        dst_quad = mesh[4:].reshape(4, 2)
+
+        # Vectorized mask for all keypoints inside this mesh cell
+        mask = (keypoints_x >= x1) & (keypoints_x < x2) & (keypoints_y >= y1) & (keypoints_y < y2)
+
+        idx = np.nonzero(mask)[0]  # Faster than enumerate
+
+        if idx.size == 0:
+            continue
+
+        cell_keypoints = keypoints[idx, :2].astype(np.float32)  # Only use xy columns
+        points_float32 = cell_keypoints.reshape(-1, 1, 2)
+
+        # Prepare source and destination quads just once per mesh
         src_quad = np.array(
             [
                 [x1, y1],  # Top-left
@@ -2338,33 +2359,14 @@ def distort_image_keypoints(
 
         perspective_mat = cv2.getPerspectiveTransform(src_quad, dst_quad)
 
-        mask = (keypoints[:, 0] >= x1) & (keypoints[:, 0] < x2) & (keypoints[:, 1] >= y1) & (keypoints[:, 1] < y2)
-        cell_keypoints = keypoints[mask]
+        transformed_points = cv2.perspectiveTransform(points_float32, perspective_mat).reshape(-1, 2)
 
-        if len(cell_keypoints) > 0:
-            # Convert to float32 before applying the transformation
-            points_float32 = cell_keypoints[:, :2].astype(np.float32).reshape(-1, 1, 2)
-            transformed_points = cv2.perspectiveTransform(
-                points_float32,
-                perspective_mat,
-            ).reshape(-1, 2)
+        # Update only those keypoints that were in this mesh
+        distorted_keypoints[idx, :2] = transformed_points
 
-            # Update distorted keypoints
-            distorted_keypoints[mask, :2] = transformed_points
-
-    # Clip keypoints to image boundaries
-    distorted_keypoints[:, 0] = np.clip(
-        distorted_keypoints[:, 0],
-        0,
-        width - 1,
-        out=distorted_keypoints[:, 0],
-    )
-    distorted_keypoints[:, 1] = np.clip(
-        distorted_keypoints[:, 1],
-        0,
-        height - 1,
-        out=distorted_keypoints[:, 1],
-    )
+    # Clip keypoints to image boundaries (done at once, faster than looping)
+    np.clip(distorted_keypoints[:, 0], 0, width - 1, out=distorted_keypoints[:, 0])
+    np.clip(distorted_keypoints[:, 1], 0, height - 1, out=distorted_keypoints[:, 1])
 
     return distorted_keypoints
 
