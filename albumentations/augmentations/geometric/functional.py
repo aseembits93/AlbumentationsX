@@ -1403,12 +1403,11 @@ def keypoints_hflip(keypoints: np.ndarray, cols: int) -> np.ndarray:
         np.ndarray: Horizontally flipped keypoints
 
     """
-    flipped_keypoints = keypoints.copy().astype(np.float32)
+    # Perform both copy and dtype cast in one go for efficiency
+    flipped_keypoints = keypoints.astype(np.float32, copy=True)
 
-    # Flip x-coordinates
+    # In-place flip x-coordinates and adjust angles (vectorized)
     flipped_keypoints[:, 0] = (cols - 1) - keypoints[:, 0]
-
-    # Adjust angles
     flipped_keypoints[:, 3] = np.pi - keypoints[:, 3]
 
     return flipped_keypoints
