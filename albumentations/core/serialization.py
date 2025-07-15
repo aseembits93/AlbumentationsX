@@ -40,15 +40,13 @@ _default_p_cache: dict[type, float] = {}
 
 
 def shorten_class_name(class_fullname: str) -> str:
-    # Split the class_fullname once at the last '.' to separate the class name
-    split_index = class_fullname.rfind(".")
-
-    # If there's no '.' or the top module is not 'albumentations', return the full name
-    if split_index == -1 or not class_fullname.startswith("albumentations."):
+    # Fast-path: check prefix match once
+    if not class_fullname.startswith(ALBUMENTATIONS_PREFIX):
         return class_fullname
 
-    # Extract the class name after the last '.'
-    return class_fullname[split_index + 1 :]
+    # Use rpartition which is faster and avoids an index+slice combo
+    head, sep, tail = class_fullname.rpartition(".")
+    return tail if sep else class_fullname
 
 
 class SerializableMeta(ABCMeta):
@@ -391,3 +389,6 @@ def get_shortest_class_fullname(cls: type[Any]) -> str:
     """
     class_fullname = f"{cls.__module__}.{cls.__name__}"
     return shorten_class_name(class_fullname)
+
+
+ALBUMENTATIONS_PREFIX = "albumentations."
