@@ -19,6 +19,15 @@ from albumentations.core.type_definitions import MONO_CHANNEL_DIMENSIONS, NUM_BB
 
 from .utils import DataProcessor, Params
 
+"""Utilities for handling bounding box operations during image augmentation.
+
+This module provides tools for processing bounding boxes in various formats (COCO, Pascal VOC, YOLO),
+converting between coordinate systems, normalizing and denormalizing coordinates, filtering
+boxes based on visibility and size criteria, and performing transformations on boxes to match
+image augmentations. It forms the core functionality for all bounding box-related operations
+in the albumentations library.
+"""
+
 __all__ = [
     "BboxParams",
     "BboxProcessor",
@@ -922,3 +931,50 @@ def mask_to_bboxes(
         if original_bboxes.shape[1] > NUM_BBOXES_COLUMNS_IN_ALBUMENTATIONS
         else new_bboxes
     )
+
+
+def _optimized_union_of_bboxes(bboxes, erosion_rate):
+    """A fast, dependency-light bbox union/erosion replacement for use here.
+    Avoids unneeded branching and Numpy ops for small N.
+    """
+    if isinstance(bboxes, list):
+        if not bboxes:
+            return None
+        bboxes = np.array(bboxes)
+    elif not hasattr(bboxes, "size") or bboxes.size == 0:
+        return None
+
+    if erosion_rate == 1.0 or erosion_rate == 1:
+        return None
+
+    n = bboxes.shape[0]
+    # Fast 1-bbox path
+    if n == 1:
+        # Only the first 4 are used, bboxes shape may be (1, 4+)
+        return bboxes[0][:4]
+
+    # Avoid repeated slicing: only once
+    b = bboxes[:, :4]
+    # Use axis=0 for min/max to process all boxes at once
+    x_min = b[:, 0].min()
+    y_min = b[:, 1].min()
+    x_max = b[:, 2].max()
+    y_max = b[:, 3].max()
+
+    width = x_max - x_min
+    height = y_max - y_min
+    if width <= 0 or height <= 0:
+        return None
+
+    if erosion_rate > 0:
+        erosion_x = width * erosion_rate * 0.5
+        erosion_y = height * erosion_rate * 0.5
+        x_min += erosion_x
+        y_min += erosion_y
+        x_max -= erosion_x
+        y_max -= erosion_y
+        # If width/height collapsed, discard
+        if x_max <= x_min or y_max <= y_min:
+            return None
+
+    return np.array([x_min, y_min, x_max, y_max], dtype=np.float32)
