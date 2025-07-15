@@ -165,14 +165,13 @@ def get_center_crop_coords(image_shape: tuple[int, int], crop_shape: tuple[int, 
         tuple[int, int, int, int]: Center crop coordinates.
 
     """
-    height, width = image_shape[:2]
-    crop_height, crop_width = crop_shape[:2]
+    height, width = image_shape
+    crop_height, crop_width = crop_shape
 
-    y_min = (height - crop_height) // 2
-    y_max = y_min + crop_height
-    x_min = (width - crop_width) // 2
-    x_max = x_min + crop_width
-    return x_min, y_min, x_max, y_max
+    y_min = (height - crop_height) >> 1
+    x_min = (width - crop_width) >> 1
+    # No slicing, all direct assignments and bit shift for division by 2
+    return x_min, y_min, x_min + crop_width, y_min + crop_height
 
 
 def crop(img: np.ndarray, x_min: int, y_min: int, x_max: int, y_max: int) -> np.ndarray:
