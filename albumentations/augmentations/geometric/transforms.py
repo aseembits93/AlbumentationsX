@@ -1223,7 +1223,17 @@ class GridElasticDeform(DualTransform):
 
     @staticmethod
     def _generate_mesh(polygons: np.ndarray, dimensions: np.ndarray) -> np.ndarray:
-        return np.hstack((dimensions.reshape(-1, 4), polygons))
+        # Optimize for memory layout and efficiency
+        # Both polys and dims should be contiguous and same dtype, no unnecessary copies
+        # Try to use np.concatenate if dimensions match, since hstack calls concatenate internally
+        if polygons.ndim != 2 or dimensions.ndim != 2:
+            raise ValueError("polygons and dimensions must be 2D arrays")
+        # Use fast stacking, avoid explicit .reshape if already (N, 4) and shapes match
+        if dimensions.shape[1] == 4:
+            return np.concatenate((dimensions, polygons), axis=1)
+        # If not, reshape dimensions to (N, 4) before concatenation
+        dimensions = dimensions.reshape(-1, 4)
+        return np.concatenate((dimensions, polygons), axis=1)
 
     def get_params_dependent_on_data(
         self,
