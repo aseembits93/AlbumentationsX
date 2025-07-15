@@ -9,6 +9,7 @@ restoring them later with the exact same configuration.
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import warnings
@@ -380,6 +381,7 @@ def register_additional_transforms() -> None:
             pass
 
 
+@functools.lru_cache(maxsize=128)
 def get_shortest_class_fullname(cls: type[Any]) -> str:
     """The function `get_shortest_class_fullname` takes a class object as input and returns its shortened
     full name.
