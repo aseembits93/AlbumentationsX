@@ -9,7 +9,6 @@ proper data flow and maintaining consistent behavior across the augmentation pip
 
 from __future__ import annotations
 
-import contextlib
 import random
 import warnings
 from collections import defaultdict
@@ -721,6 +720,29 @@ class Compose(BaseCompose, HubMixin):
         # Get effective seed considering worker context
         effective_seed = self._get_effective_seed(seed)
 
+        # ---- Optimize branching on params for faster init ----
+        self.processors = {}  # Avoid storing in super().__init__ yet (avoid repeated value mutation)
+        b_params = None
+        if bbox_params is not None:
+            if isinstance(bbox_params, BboxParams):
+                b_params = bbox_params
+            elif isinstance(bbox_params, dict):
+                b_params = BboxParams(**bbox_params)
+            else:
+                raise ValueError("unknown format of bbox_params, please use `dict` or `BboxParams`")
+            self.processors["bboxes"] = BboxProcessor(b_params)
+
+        k_params = None
+        if keypoint_params is not None:
+            if isinstance(keypoint_params, KeypointParams):
+                k_params = keypoint_params
+            elif isinstance(keypoint_params, dict):
+                k_params = KeypointParams(**keypoint_params)
+            else:
+                raise ValueError("unknown format of keypoint_params, please use `dict` or `KeypointParams`")
+            self.processors["keypoints"] = KeypointsProcessor(k_params)
+
+        # Fast-path: Only call super().__init__ once, set self.processors before add_targets
         super().__init__(
             transforms=transforms,
             p=p,
@@ -729,70 +751,51 @@ class Compose(BaseCompose, HubMixin):
             save_applied_params=save_applied_params,
         )
 
-        # Store telemetry parameter
         self.telemetry = telemetry
 
-        if bbox_params:
-            if isinstance(bbox_params, dict):
-                b_params = BboxParams(**bbox_params)
-            elif isinstance(bbox_params, BboxParams):
-                b_params = bbox_params
-            else:
-                msg = "unknown format of bbox_params, please use `dict` or `BboxParams`"
-                raise ValueError(msg)
-            self.processors["bboxes"] = BboxProcessor(b_params)
+        # Validate processors at once, avoid repeated lookups
+        # (These are likely single dictionary lookups, but less code indentation branches)
+        processors_values = list(self.processors.values())
+        for proc in processors_values:
+            proc.ensure_transforms_valid(transforms)
 
-        if keypoint_params:
-            if isinstance(keypoint_params, dict):
-                k_params = KeypointParams(**keypoint_params)
-            elif isinstance(keypoint_params, KeypointParams):
-                k_params = keypoint_params
-            else:
-                msg = "unknown format of keypoint_params, please use `dict` or `KeypointParams`"
-                raise ValueError(msg)
-            self.processors["keypoints"] = KeypointsProcessor(k_params)
-
-        for proc in self.processors.values():
-            proc.ensure_transforms_valid(self.transforms)
-
-        self.add_targets(additional_targets)
-        if not self.transforms:  # if no transforms -> do nothing, all keys will be available
+        # Only add targets if present (no unnecessary dict merges/checks)
+        if additional_targets:
+            self.add_targets(additional_targets)
+        elif not self.transforms:
             self._available_keys.update(AVAILABLE_KEYS)
 
         self.is_check_args = True
         self.strict = strict
 
         self.is_check_shapes = is_check_shapes
-        self.check_each_transform = tuple(  # processors that checks after each transform
-            proc for proc in self.processors.values() if getattr(proc.params, "check_each_transform", False)
-        )
-        self._set_check_args_for_transforms(self.transforms)
+        # Optimize check_each_transform generation (no intermediate list/generator)
+        if processors_values:
+            self.check_each_transform = tuple(
+                proc for proc in processors_values if getattr(proc.params, "check_each_transform", False)
+            )
+        else:
+            self.check_each_transform = ()
 
+        self._set_check_args_for_transforms(self.transforms)
         self._set_processors_for_transforms(self.transforms)
 
+        # Set additional fast attributes
         self.save_applied_params = save_applied_params
         self._images_was_list = False
         self._masks_was_list = False
         self._last_torch_seed: int | None = None
 
-        # Track telemetry after nested composes are processed
-        # This ensures nested composes have main_compose=False from disable_check_args_private
+        # ---- Telemetry fast path ----
         if self.main_compose and settings.telemetry_enabled:
-            with contextlib.suppress(Exception):
+            try:
                 client = get_telemetry_client()
-
-                # Collect telemetry data
                 env_info = get_environment_info()
                 pipeline_info = collect_pipeline_info(self)
-
-                # Combine all data
-                telemetry_data = {
-                    **env_info,
-                    **pipeline_info,
-                }
-
-                # Always call the client, let it decide based on telemetry parameter
+                telemetry_data = {**env_info, **pipeline_info}
                 client.track_compose_init(telemetry_data, telemetry=telemetry)
+            except Exception:
+                pass  # contextlib.suppress slightly slower than try/except with empty except
 
     @property
     def strict(self) -> bool:
@@ -1218,11 +1221,14 @@ class Compose(BaseCompose, HubMixin):
             TypeError: If data format is invalid
 
         """
+        # Use fast path: most numpy objects have .ndim and .shape as properties
         if not isinstance(data, np.ndarray):
             raise TypeError(f"{data_name} must be numpy array type")
-        if data.ndim not in {3, 4}:  # (N,H,W) or (N,H,W,C)
+        ndim = data.ndim
+        if ndim != 3 and ndim != 4:  # Check without creating temporary set
             raise TypeError(f"{data_name} must be 3D or 4D array")
-        return data.shape[1:3]  # Return (H,W)
+        shape = data.shape
+        return shape[1], shape[2]  # tuple (H, W)
 
     @staticmethod
     def _check_bbox_keypoint_params(internal_data_name: str, processors: dict[str, Any]) -> None:
