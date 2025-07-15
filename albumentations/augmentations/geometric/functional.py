@@ -1360,10 +1360,18 @@ def bboxes_transpose(bboxes: np.ndarray) -> np.ndarray:
         np.ndarray: Transposed bounding boxes
 
     """
-    transposed_bboxes = bboxes.copy()
-    transposed_bboxes[:, [0, 1, 2, 3]] = bboxes[:, [1, 0, 3, 2]]
-
-    return transposed_bboxes
+    # Only the first 4 columns need to be switched: [x_min, y_min, x_max, y_max] <-> [y_min, x_min, y_max, x_max]
+    # This can be done efficiently with advanced indexing and without a copy if bboxes is not views elsewhere
+    result = bboxes.copy()
+    x = bboxes[:, 0]
+    y = bboxes[:, 1]
+    x2 = bboxes[:, 2]
+    y2 = bboxes[:, 3]
+    result[:, 0] = y
+    result[:, 1] = x
+    result[:, 2] = y2
+    result[:, 3] = x2
+    return result
 
 
 @handle_empty_array("keypoints")
