@@ -137,13 +137,27 @@ class LabelEncoder:
             np.ndarray: Original labels.
 
         """
+        # Optimize: use ravel() for numpy arrays for fast, memory-efficient flatten
         if isinstance(y, np.ndarray):
-            y = y.flatten().tolist()
+            y_arr = y.ravel()
+        else:
+            y_arr = np.array(y, copy=False)
 
         if self.is_numerical:
-            return np.array(y)
+            return y_arr
 
-        return np.array([self.inverse_classes_[label] for label in y])
+        # If possible, use numpy vectorized lookup for int arrays
+        if isinstance(y_arr, np.ndarray) and np.issubdtype(y_arr.dtype, np.integer):
+            # Build numpy lookup array once
+            inv = self.inverse_classes_
+            max_label = max(inv)
+            # Build a contiguous list of labels (for direct lookup)
+            lookup = np.empty(max_label + 1, dtype=object)
+            for index, value in inv.items():
+                lookup[index] = value
+            return lookup[y_arr]
+        inv = self.inverse_classes_
+        return np.array([inv[label] for label in y_arr])
 
     def update(self, y: Sequence[Any] | np.ndarray) -> LabelEncoder:
         """Update the encoder with new labels encountered after initial fitting.
@@ -299,16 +313,16 @@ class LabelManager:
 
     def _decode_data(self, encoded_data: np.ndarray, metadata: LabelMetadata) -> np.ndarray:
         """Decode processed data."""
+        # Optimize: use ravel (view) instead of flatten (copy) when non-numerical or as needed
         if metadata.is_numerical:
             if metadata.dtype is not None:
-                return encoded_data.astype(metadata.dtype)
-            return encoded_data.flatten()  # Flatten for list conversion
-
+                return encoded_data.astype(metadata.dtype, copy=False)
+            return encoded_data.ravel()  # More efficient for 1D view
         if metadata.encoder is None:
             raise ValueError("Encoder not found for non-numerical data")
-
-        decoded = metadata.encoder.inverse_transform(encoded_data.astype(int))
-        return decoded.reshape(-1)  # Ensure 1D array
+        # Already a 1D array is returned by inverse_transform
+        decoded = metadata.encoder.inverse_transform(encoded_data.astype(int, copy=False))
+        return decoded.ravel()  # Use ravel for safety & speed
 
     def _restore_type(self, decoded_data: np.ndarray, metadata: LabelMetadata) -> Any:
         """Restore data to its original type."""
