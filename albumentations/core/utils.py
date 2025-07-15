@@ -21,6 +21,15 @@ from albumentations.core.label_manager import LabelManager
 from .serialization import Serializable
 from .type_definitions import PAIR, Number
 
+"""Module containing utility functions and classes for the core Albumentations framework.
+
+This module provides a collection of helper functions and base classes used throughout
+the Albumentations library. It includes utilities for shape handling, parameter processing,
+data conversion, and serialization. The module defines abstract base classes for data
+processors that implement the conversion logic between different data formats used in
+the transformation pipeline.
+"""
+
 
 def get_shape(data: dict[str, Any]) -> tuple[int, int]:
     """Extract height and width dimensions from input data dictionary.
@@ -38,15 +47,70 @@ def get_shape(data: dict[str, Any]) -> tuple[int, int]:
         tuple[int, int]: (height, width) dimensions
 
     """
-    # After preprocessing, all data has channel dimension at the end
+    # Hoist repeated keys/shape lookups for speed.
+    # Prioritize the most common cases first (likely numpy arrays).
+
+    # Inline fast path for "image"
     if "image" in data:
-        return _get_shape_from_image(data["image"])
+        img = data["image"]
+        # Numpy (H, W, C) or (H, W)
+        if not _is_torch_tensor(img):
+            return img.shape[0], img.shape[1]
+        # Torch tensor: (C, H, W) or (H, W)
+        s = img.shape
+        l = len(s)
+        if l == 3:
+            return int(s[1]), int(s[2])
+        if l == 2:
+            return int(s[0]), int(s[1])
+        raise ValueError(f"Unsupported 2D torch tensor shape {s}")
+
+    # Inline fast path for "images"
     if "images" in data:
-        return _get_shape_from_images(data["images"])
+        imgs = data["images"]
+        if not _is_torch_tensor(imgs):
+            # numpy batch: NHWC or NHW
+            first_shape = imgs.shape
+            # If it's a numpy memmap, imgs[0] may be slow, so prefer shape
+            # shape: (N, H, W, ...) or (N, H, W)
+            return first_shape[1], first_shape[2]
+        # Torch tensor: (N, C, H, W) or (N, H, W)
+        s = imgs.shape
+        l = len(s)
+        if l == 4:
+            return int(s[2]), int(s[3])
+        if l == 3:
+            return int(s[1]), int(s[2])
+        raise ValueError(f"Unsupported batch 2D torch shape {s}")
+
+    # Inline fast path for "volume"
     if "volume" in data:
-        return _get_shape_from_volume(data["volume"])
+        vol = data["volume"]
+        if not _is_torch_tensor(vol):
+            s = vol.shape  # (D, H, W, C) or (D, H, W)
+            return s[1], s[2]
+        s = vol.shape
+        l = len(s)
+        if l == 4:
+            return int(s[2]), int(s[3])
+        if l == 3:
+            return int(s[1]), int(s[2])
+        raise ValueError(f"Unsupported 3D torch tensor shape {s}")
+
+    # Inline fast path for "volumes"
     if "volumes" in data:
-        return _get_shape_from_volumes(data["volumes"])
+        vols = data["volumes"]
+        if not _is_torch_tensor(vols):
+            # (N, D, H, W, C) or (N, D, H, W)
+            s = vols.shape
+            return s[2], s[3]
+        s = vols.shape
+        l = len(s)
+        if l == 5:
+            return int(s[3]), int(s[4])
+        if l == 4:
+            return int(s[2]), int(s[3])
+        raise ValueError(f"Unsupported batch 3D torch tensor shape {s}")
 
     raise ValueError("No image or volume found in data", data.keys())
 
