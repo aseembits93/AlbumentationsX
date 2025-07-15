@@ -1244,12 +1244,14 @@ def transpose_images(images: np.ndarray) -> np.ndarray:
             - (N, W, H, C) for multi-channel images
 
     """
-    # Generate the new axes order
+    # Fast, explicit axes order for common cases
+    if images.ndim == 3:
+        return images.transpose(0, 2, 1)
+    if images.ndim == 4:
+        return images.transpose(0, 2, 1, 3)
+    # Fallback to generic method for unsupported dimensions
     new_axes = list(range(images.ndim))
-    # Swap dimensions 1 and 2 (Height and Width), preserving batch dimension and channels
     new_axes[1], new_axes[2] = 2, 1
-
-    # Transpose the array using the new axes order
     return images.transpose(new_axes)
 
 
