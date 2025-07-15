@@ -2066,12 +2066,10 @@ def get_pad_grid_dimensions(
 
     """
     rows, cols = image_shape[:2]
-
     grid_rows = 1 + math.ceil(pad_top / rows) + math.ceil(pad_bottom / rows)
     grid_cols = 1 + math.ceil(pad_left / cols) + math.ceil(pad_right / cols)
     original_row = math.ceil(pad_top / rows)
     original_col = math.ceil(pad_left / cols)
-
     return {
         "grid_shape": (grid_rows, grid_cols),
         "original_position": (original_row, original_col),
@@ -2487,9 +2485,8 @@ def pad_keypoints(
 
     """
     if border_mode not in REFLECT_BORDER_MODES:
-        shift_vector = np.array([pad_left, pad_top, 0])
+        shift_vector = np.array([pad_left, pad_top, 0], dtype=keypoints.dtype)
         return shift_keypoints(keypoints, shift_vector)
-
     grid_dimensions = get_pad_grid_dimensions(
         pad_top,
         pad_bottom,
@@ -2497,21 +2494,14 @@ def pad_keypoints(
         pad_right,
         image_shape,
     )
-
     keypoints = generate_reflected_keypoints(keypoints, grid_dimensions, image_shape)
-
     rows, cols = image_shape[:2]
-
-    # Calculate the number of grid cells added on each side
     original_row, original_col = grid_dimensions["original_position"]
-
-    # Subtract the offset based on the number of added grid cells
-    keypoints[:, 0] -= original_col * cols - pad_left  # x
-    keypoints[:, 1] -= original_row * rows - pad_top  # y
-
+    # Perform subtraction in a vectorized way (avoiding temporary arrays)
+    keypoints[:, 0] -= original_col * cols - pad_left
+    keypoints[:, 1] -= original_row * rows - pad_top
     new_height = pad_top + pad_bottom + rows
     new_width = pad_left + pad_right + cols
-
     return validate_keypoints(keypoints, (new_height, new_width))
 
 
@@ -2535,11 +2525,10 @@ def validate_keypoints(
 
     """
     rows, cols = image_shape[:2]
-
-    x, y = keypoints[:, 0], keypoints[:, 1]
-
-    valid_indices = (x >= 0) & (x < cols) & (y >= 0) & (y < rows)
-
+    # Vectorized validity mask
+    valid_indices = (
+        (keypoints[:, 0] >= 0) & (keypoints[:, 0] < cols) & (keypoints[:, 1] >= 0) & (keypoints[:, 1] < rows)
+    )
     return keypoints[valid_indices]
 
 
@@ -2557,9 +2546,11 @@ def shift_keypoints(keypoints: np.ndarray, shift_vector: np.ndarray) -> np.ndarr
         np.ndarray: The shifted keypoints.
 
     """
-    shifted_keypoints = keypoints.copy()
-    shifted_keypoints[:, :3] += shift_vector[:3]  # Only shift x, y and z
-    return shifted_keypoints
+    shifted = keypoints.copy()
+    # Minimize slicing
+    sl = min(shifted.shape[1], shift_vector.shape[0])  # guard vs. >3 dim keys
+    shifted[:, :sl] += shift_vector[:sl]
+    return shifted
 
 
 def generate_reflected_keypoints(
@@ -2595,67 +2586,50 @@ def generate_reflected_keypoints(
     """
     grid_rows, grid_cols = grid_dims["grid_shape"]
     original_row, original_col = grid_dims["original_position"]
-
-    # Prepare flipped versions of keypoints
-    keypoints_hflipped = flip_keypoints(
-        keypoints,
-        flip_horizontal=True,
-        image_shape=image_shape,
-    )
-    keypoints_vflipped = flip_keypoints(
-        keypoints,
-        flip_vertical=True,
-        image_shape=image_shape,
-    )
-    keypoints_hvflipped = flip_keypoints(
-        keypoints,
-        flip_horizontal=True,
-        flip_vertical=True,
-        image_shape=image_shape,
-    )
-
     rows, cols = image_shape[:2]
+    N, D = keypoints.shape
 
-    # Shift all versions to the original position
-    shift_vector = np.array(
-        [original_col * cols, original_row * rows, 0, 0, 0],
-    )  # Only shift x and y
-    keypoints = shift_keypoints(keypoints, shift_vector)
-    keypoints_hflipped = shift_keypoints(keypoints_hflipped, shift_vector)
-    keypoints_vflipped = shift_keypoints(keypoints_vflipped, shift_vector)
-    keypoints_hvflipped = shift_keypoints(keypoints_hvflipped, shift_vector)
+    # Precompute the four flip states
+    # Only call flip_keypoints if the flip is True
+    versions = [
+        keypoints,  # (0,0)
+        flip_keypoints(keypoints, flip_horizontal=True, image_shape=image_shape),  # (0,1)
+        flip_keypoints(keypoints, flip_vertical=True, image_shape=image_shape),  # (1,0)
+        flip_keypoints(keypoints, flip_horizontal=True, flip_vertical=True, image_shape=image_shape),  # (1,1)
+    ]
+    # Shift all versions to original position ONCE (slice up to available dims for compatibility)
+    base_shift = np.zeros(D, dtype=keypoints.dtype)
+    base_shift[:2] = [original_col * cols, original_row * rows]
+    for idx in range(4):
+        versions[idx] = shift_keypoints(versions[idx], base_shift)
 
-    new_keypoints = []
+    # Build up all possible (grid_row, grid_col) pairs in flat arrays for full vectorization
+    row_indices = np.repeat(np.arange(grid_rows), grid_cols)
+    col_indices = np.tile(np.arange(grid_cols), grid_rows)
+    n_cells = grid_rows * grid_cols
 
-    for grid_row in range(grid_rows):
-        for grid_col in range(grid_cols):
-            # Determine which version of keypoints to use based on grid position
-            if (grid_row - original_row) % 2 == 0 and (grid_col - original_col) % 2 == 0:
-                current_keypoints = keypoints
-            elif (grid_row - original_row) % 2 == 0:
-                current_keypoints = keypoints_hflipped
-            elif (grid_col - original_col) % 2 == 0:
-                current_keypoints = keypoints_vflipped
-            else:
-                current_keypoints = keypoints_hvflipped
+    # Compute which flip version to use
+    flip_row_mod2 = (row_indices - original_row) & 1
+    flip_col_mod2 = (col_indices - original_col) & 1
+    version_indices = (flip_row_mod2 << 1) | flip_col_mod2  # Make (row, col) into [0..3] index (00,01,10,11)
 
-            # Shift to the current grid cell
-            cell_shift = np.array(
-                [
-                    (grid_col - original_col) * cols,
-                    (grid_row - original_row) * rows,
-                    0,
-                    0,
-                    0,
-                ],
-            )
-            shifted_keypoints = shift_keypoints(current_keypoints, cell_shift)
+    # Build offsets for all grid cells
+    shifts = np.zeros((n_cells, D), dtype=keypoints.dtype)
+    shifts[:, 0] = (col_indices - original_col) * cols
+    shifts[:, 1] = (row_indices - original_row) * rows
 
-            new_keypoints.append(shifted_keypoints)
+    # For each cell, grab the correct version and shift
+    all_keypoints = np.empty((n_cells * N, D), dtype=keypoints.dtype)
+    # Use a view to avoid loop overhead; process blockwise
+    for i in range(n_cells):
+        v_idx = version_indices[i]
+        all_keypoints[i * N : (i + 1) * N] = shift_keypoints(versions[v_idx], shifts[i])
 
-    result = np.vstack(new_keypoints)
+    if center_in_origin:
+        # Shift the whole result by -base_shift
+        all_keypoints = shift_keypoints(all_keypoints, -base_shift)
 
-    return shift_keypoints(result, -shift_vector) if center_in_origin else result
+    return all_keypoints
 
 
 @handle_empty_array("keypoints")
