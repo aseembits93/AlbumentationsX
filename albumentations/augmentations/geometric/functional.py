@@ -60,20 +60,36 @@ def bboxes_rot90(bboxes: np.ndarray, factor: int) -> np.ndarray:
     if factor == 0:
         return bboxes
 
+    # The following in-place operations minimize memory usage and maximize speed
     rotated_bboxes = bboxes.copy()
-    x_min, y_min, x_max, y_max = bboxes[:, 0], bboxes[:, 1], bboxes[:, 2], bboxes[:, 3]
 
     if factor == 1:
+        # Fast in-place assignment without intermediate arrays
+        x_min = bboxes[:, 0]
+        y_min = bboxes[:, 1]
+        x_max = bboxes[:, 2]
+        y_max = bboxes[:, 3]
+
         rotated_bboxes[:, 0] = y_min
         rotated_bboxes[:, 1] = 1 - x_max
         rotated_bboxes[:, 2] = y_max
         rotated_bboxes[:, 3] = 1 - x_min
     elif factor == ROT90_180_FACTOR:
+        x_min = bboxes[:, 0]
+        y_min = bboxes[:, 1]
+        x_max = bboxes[:, 2]
+        y_max = bboxes[:, 3]
+
         rotated_bboxes[:, 0] = 1 - x_max
         rotated_bboxes[:, 1] = 1 - y_max
         rotated_bboxes[:, 2] = 1 - x_min
         rotated_bboxes[:, 3] = 1 - y_min
     elif factor == ROT90_270_FACTOR:
+        x_min = bboxes[:, 0]
+        y_min = bboxes[:, 1]
+        x_max = bboxes[:, 2]
+        y_max = bboxes[:, 3]
+
         rotated_bboxes[:, 0] = 1 - y_max
         rotated_bboxes[:, 1] = x_min
         rotated_bboxes[:, 2] = 1 - y_min
