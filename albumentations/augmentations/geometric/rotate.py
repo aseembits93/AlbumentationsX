@@ -630,27 +630,43 @@ class SafeRotate(Affine):
         image_shape: tuple[int, int],
     ) -> tuple[np.ndarray, dict[str, float]]:
         height, width = image_shape[:2]
-        rotation_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
+        # Compose the rotation matrix directly to save time
+        alpha = np.cos(np.deg2rad(angle))
+        beta = np.sin(np.deg2rad(angle))
 
-        # Calculate new image size
-        abs_cos = abs(rotation_mat[0, 0])
-        abs_sin = abs(rotation_mat[0, 1])
+        # The original 2x3 rotation matrix from OpenCV
+        r00 = alpha
+        r01 = beta
+        r10 = -beta
+        r11 = alpha
+        tx = (1 - r00) * center[0] - r01 * center[1]
+        ty = r01 * center[0] + (1 - r11) * center[1]
+
+        abs_cos = abs(alpha)
+        abs_sin = abs(beta)
+
+        # Compute new bounding dimensions after rotation
         new_w = int(height * abs_sin + width * abs_cos)
         new_h = int(height * abs_cos + width * abs_sin)
 
-        # Adjust the rotation matrix to take into account the new size
-        rotation_mat[0, 2] += new_w / 2 - center[0]
-        rotation_mat[1, 2] += new_h / 2 - center[1]
+        # Shift translation to keep the image centered
+        tx += new_w / 2 - center[0]
+        ty += new_h / 2 - center[1]
 
-        # Calculate scaling factors
+        # Compute scale to fit rotated image in original frame
         scale_x = width / new_w
         scale_y = height / new_h
 
-        # Create scaling matrix
-        scale_mat = np.array([[scale_x, 0, 0], [0, scale_y, 0], [0, 0, 1]])
-
-        # Combine rotation and scaling
-        matrix = scale_mat @ np.vstack([rotation_mat, [0, 0, 1]])
+        # Compose full affine 3x3 matrix directly (no vstack, no @, do manually)
+        # Multiply the rotation+translation matrix by scale_x and scale_y
+        matrix = np.array(
+            [
+                [r00 * scale_x, r01 * scale_x, tx * scale_x],
+                [r10 * scale_y, r11 * scale_y, ty * scale_y],
+                [0, 0, 1],
+            ],
+            dtype=np.float64,
+        )
 
         return matrix, {"x": scale_x, "y": scale_y}
 
