@@ -148,24 +148,26 @@ def keypoints_rot90(
         return keypoints
 
     height, width = image_shape[:2]
-    rotated_keypoints = keypoints.copy().astype(np.float32)
-
-    x, y, angle = keypoints[:, 0], keypoints[:, 1], keypoints[:, 3]
+    out = keypoints.astype(np.float32, copy=True)
 
     if factor == 1:
-        rotated_keypoints[:, 0] = y
-        rotated_keypoints[:, 1] = width - 1 - x
-        rotated_keypoints[:, 3] = angle - np.pi / 2
+        # Rotate 90 deg CCW
+        # (x_new, y_new) = (y, width-1-x)
+        out[:, 0] = keypoints[:, 1]
+        out[:, 1] = width - 1 - keypoints[:, 0]
+        out[:, 3] = keypoints[:, 3] - np.pi / 2
     elif factor == ROT90_180_FACTOR:
-        rotated_keypoints[:, 0] = width - 1 - x
-        rotated_keypoints[:, 1] = height - 1 - y
-        rotated_keypoints[:, 3] = angle - np.pi
+        # Rotate 180 deg
+        out[:, 0] = width - 1 - keypoints[:, 0]
+        out[:, 1] = height - 1 - keypoints[:, 1]
+        out[:, 3] = keypoints[:, 3] - np.pi
     elif factor == ROT90_270_FACTOR:
-        rotated_keypoints[:, 0] = height - 1 - y
-        rotated_keypoints[:, 1] = x
-        rotated_keypoints[:, 3] = angle + np.pi / 2
+        # Rotate 270 deg CCW
+        out[:, 0] = height - 1 - keypoints[:, 1]
+        out[:, 1] = keypoints[:, 0]
+        out[:, 3] = keypoints[:, 3] + np.pi / 2
 
-    return rotated_keypoints
+    return out
 
 
 @handle_empty_array("keypoints")
