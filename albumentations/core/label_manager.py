@@ -17,6 +17,15 @@ from typing import Any
 
 import numpy as np
 
+"""Module for managing and transforming label data during augmentation.
+
+This module provides utilities for encoding, decoding, and tracking metadata for labels
+during the augmentation process. It includes classes for managing label transformations,
+preserving data types, and ensuring consistent handling of categorical, numerical, and
+mixed label types. The module supports automatic encoding of string labels to numerical
+values and restoration of original data types after processing.
+"""
+
 
 def custom_sort(item: Any) -> tuple[int, Real | str]:
     """Sort items by type then value for consistent label ordering.
@@ -254,8 +263,8 @@ class LabelManager:
     def restore_field(self, data_name: str, label_field: str, encoded_data: np.ndarray) -> Any:
         """Restore a label field to its original format."""
         metadata = self.metadata[data_name][label_field]
-        decoded_data = self._decode_data(encoded_data, metadata)
-        return self._restore_type(decoded_data, metadata)
+        decoded_data = self._decode_data_fast(encoded_data, metadata)
+        return self._restore_type_fast(decoded_data, metadata)
 
     def _analyze_input(self, field_data: Any) -> LabelMetadata:
         """Analyze input data and create metadata."""
@@ -337,3 +346,53 @@ class LabelManager:
             if isinstance(encoder, LabelEncoder):
                 return encoder
         return None
+
+    def _decode_data_fast(self, encoded_data: np.ndarray, metadata: LabelMetadata) -> np.ndarray:
+        """Decode processed data."""
+        if metadata.is_numerical:
+            if metadata.dtype is not None:
+                # Only copy if dtype actually mismatches, else return as is.
+                if encoded_data.dtype != metadata.dtype:
+                    return encoded_data.astype(metadata.dtype, copy=False)
+                return encoded_data
+            # Flatten only if necessary
+            if encoded_data.ndim > 1:
+                return encoded_data.reshape(-1)
+            return encoded_data
+
+        encoder = metadata.encoder
+        if encoder is None:
+            raise ValueError("Encoder not found for non-numerical data")
+
+        # Avoid unnecessary astype if already int
+        arr_int = encoded_data
+        if encoded_data.dtype.kind != "i" and encoded_data.dtype.kind != "u":
+            arr_int = encoded_data.astype(int, copy=False)
+
+        # inverse_transform always returns a new array
+        decoded = encoder.inverse_transform(arr_int)
+        if decoded.ndim > 1:
+            return decoded.reshape(-1)
+        return decoded
+
+    def _restore_type_fast(self, decoded_data: np.ndarray, metadata: LabelMetadata) -> Any:
+        """Restore data to its original type."""
+        # Fast-path for typical types: list or np.ndarray (skip slow isinstance/issubclass check if possible)
+        orig_type = metadata.input_type
+        if orig_type is list:
+            return decoded_data.tolist()
+        if orig_type is np.ndarray:
+            if metadata.dtype is not None and decoded_data.dtype != metadata.dtype:
+                return decoded_data.astype(metadata.dtype, copy=False)
+            return decoded_data
+        # Only fall back to issubclass logic if orig_type is type object different from list/ndarray
+        if isinstance(orig_type, type):
+            if issubclass(orig_type, Sequence):
+                return decoded_data.tolist()
+            if issubclass(orig_type, np.ndarray):
+                if metadata.dtype is not None and decoded_data.dtype != metadata.dtype:
+                    return decoded_data.astype(metadata.dtype, copy=False)
+                return decoded_data
+
+        # For any other type, convert to list by default
+        return decoded_data.tolist()
