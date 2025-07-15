@@ -7,7 +7,7 @@ scaling with aspect ratio preservation, and size-constrained transformations.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -175,7 +175,12 @@ class RandomScale(DualTransform):
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.scale_limit = cast("tuple[float, float]", scale_limit)
+        # Normalize scale_limit to tuple
+        if isinstance(scale_limit, tuple):
+            self.scale_limit = scale_limit
+        else:
+            limit = float(scale_limit)
+            self.scale_limit = (-limit, limit)
         self.interpolation = interpolation
         self.mask_interpolation = mask_interpolation
         self.area_for_downscale = area_for_downscale
