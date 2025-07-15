@@ -173,7 +173,23 @@ class BaseCrop(DualTransform):
         crop_coords: tuple[int, int, int, int],
         **params: Any,
     ) -> np.ndarray:
-        return fcrops.volume_crop_yx(images, crop_coords[0], crop_coords[1], crop_coords[2], crop_coords[3])
+        # Inline the crop logic for maximum speed (eliminate extra function call)
+        x_min, y_min, x_max, y_max = crop_coords
+        shape = images.shape
+        height = shape[1]
+        width = shape[2]
+        if x_max <= x_min or y_max <= y_min:
+            raise ValueError(
+                "Crop coordinates must satisfy min < max. Got: "
+                f"(x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max})",
+            )
+        if x_min < 0 or y_min < 0 or x_max > width or y_max > height:
+            raise ValueError(
+                "Crop coordinates must be within image dimensions (H, W). Got: "
+                f"(x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}) "
+                f"for volume shape {shape[:3]}",
+            )
+        return images[:, y_min:y_max, x_min:x_max]
 
     def apply_to_volumes(
         self,
