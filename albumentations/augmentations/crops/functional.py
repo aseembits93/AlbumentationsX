@@ -19,6 +19,14 @@ from albumentations.augmentations.geometric import functional as fgeometric
 from albumentations.augmentations.utils import handle_empty_array
 from albumentations.core.bbox_utils import denormalize_bboxes, normalize_bboxes
 
+"""Functional implementations of image cropping operations.
+
+This module provides utility functions for performing various cropping operations on images,
+bounding boxes, and keypoints. It includes functions to calculate crop coordinates, crop images,
+and handle the corresponding transformations for bounding boxes and keypoints to maintain
+consistency between different data types during cropping operations.
+"""
+
 __all__ = [
     "crop",
     "crop_and_pad",
