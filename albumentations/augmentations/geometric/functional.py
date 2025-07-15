@@ -3162,33 +3162,35 @@ def compute_perspective_params(
     height, width = image_shape
     top_left, top_right, bottom_right, bottom_left = points
 
-    def adjust_dimension(
-        dim1: np.ndarray,
-        dim2: np.ndarray,
-        min_size: int = 2,
-    ) -> float:
-        size = np.sqrt(np.sum((dim1 - dim2) ** 2))
-        if size < min_size:
-            step_size = (min_size - size) / 2
-            dim1[dim1 > dim2] += step_size
-            dim2[dim1 > dim2] -= step_size
-            dim1[dim1 <= dim2] -= step_size
-            dim2[dim1 <= dim2] += step_size
-            size = min_size
-        return size
+    # Inline dimension adjustment for minimized overhead and memory allocations
+    def fast_dim(dist1, dist2, min_size=2.0):
+        size = np.linalg.norm(dist1 - dist2)
+        if size >= min_size:
+            return size
+        # Instead of broadcasting and masks, use direct calculation (critical for perf)
+        step_size = (min_size - size) * 0.5
+        for i in range(2):
+            if dist1[i] > dist2[i]:
+                dist1[i] += step_size
+                dist2[i] -= step_size
+            else:
+                dist1[i] -= step_size
+                dist2[i] += step_size
+        return min_size
 
+    # Direct reference for performance
     max_width = max(
-        adjust_dimension(top_right, top_left),
-        adjust_dimension(bottom_right, bottom_left),
+        fast_dim(top_right, top_left),
+        fast_dim(bottom_right, bottom_left),
     )
     max_height = max(
-        adjust_dimension(bottom_right, top_right),
-        adjust_dimension(bottom_left, top_left),
+        fast_dim(bottom_right, top_right),
+        fast_dim(bottom_left, top_left),
     )
 
+    # Preallocate output using float32 dtype for efficiency
     dst = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
-    matrix = cv2.getPerspectiveTransform(points, dst)
-
+    matrix = cv2.getPerspectiveTransform(points.astype(np.float32), dst)
     return matrix, int(max_width), int(max_height)
 
 
