@@ -198,22 +198,23 @@ def keypoints_d4(
 
     """
     rows, cols = image_shape[:2]
-    transformations = {
-        "e": lambda x: x,  # Identity transformation
-        "r90": lambda x: keypoints_rot90(x, 1, image_shape),  # Rotate 90 degrees
-        "r180": lambda x: keypoints_rot90(x, 2, image_shape),  # Rotate 180 degrees
-        "r270": lambda x: keypoints_rot90(x, 3, image_shape),  # Rotate 270 degrees
-        "v": lambda x: keypoints_vflip(x, rows),  # Vertical flip
-        "hvt": lambda x: keypoints_transpose(
-            keypoints_rot90(x, 2, image_shape),
-        ),  # Reflect over anti diagonal
-        "h": lambda x: keypoints_hflip(x, cols),  # Horizontal flip
-        "t": lambda x: keypoints_transpose(x),  # Transpose (reflect over main diagonal)
-    }
-    # Execute the appropriate transformation
-    if group_member in transformations:
-        return transformations[group_member](keypoints)
-
+    if group_member == "e":
+        return keypoints
+    if group_member == "r90":
+        return keypoints_rot90(keypoints, 1, image_shape)
+    if group_member == "r180":
+        return keypoints_rot90(keypoints, 2, image_shape)
+    if group_member == "r270":
+        return keypoints_rot90(keypoints, 3, image_shape)
+    if group_member == "v":
+        return keypoints_vflip(keypoints, rows)
+    if group_member == "hvt":
+        # Reflect over anti diagonal: rotate 180 + transpose
+        return keypoints_transpose(keypoints_rot90(keypoints, 2, image_shape))
+    if group_member == "h":
+        return keypoints_hflip(keypoints, cols)
+    if group_member == "t":
+        return keypoints_transpose(keypoints)
     raise ValueError(f"Invalid group member: {group_member}")
 
 
