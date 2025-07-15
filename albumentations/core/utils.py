@@ -88,20 +88,23 @@ def get_volume_shape(data: dict[str, Any]) -> tuple[int, int, int] | None:
 
 def _is_torch_tensor(obj: Any) -> bool:
     """Check if an object is a PyTorch tensor."""
-    return hasattr(obj, "__module__") and "torch" in obj.__module__
+    module = getattr(obj, "__module__", None)
+    # Avoids hasattr + string search twice
+    return module is not None and "torch" in module
 
 
 def _get_shape_from_image(img: np.ndarray) -> tuple[int, int]:
     """Extract shape from a single image."""
+    shape = img.shape
     # Check if it's a torch tensor that has been transposed to CHW format
     if _is_torch_tensor(img):
-        # PyTorch tensor in CHW format
-        if len(img.shape) == 3:  # (C, H, W)
-            return int(img.shape[1]), int(img.shape[2])
-        if len(img.shape) == 2:  # (H, W) - grayscale without channel
-            return int(img.shape[0]), int(img.shape[1])
+        ndim = len(shape)
+        if ndim == 3:  # (C, H, W)
+            return int(shape[1]), int(shape[2])
+        if ndim == 2:  # (H, W) - grayscale without channel
+            return int(shape[0]), int(shape[1])
     # Regular numpy array in HWC format
-    return img.shape[0], img.shape[1]
+    return shape[0], shape[1]
 
 
 def _get_shape_from_images(imgs: np.ndarray) -> tuple[int, int]:
