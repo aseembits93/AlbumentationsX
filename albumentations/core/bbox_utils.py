@@ -439,10 +439,14 @@ def denormalize_bboxes(
         np.ndarray: Denormalized bounding boxes `[(x_min, y_min, x_max, y_max, ...)]`.
 
     """
-    scale_factors = (shape[1], shape[0])
-
-    # Vectorized scaling of bbox coordinates
-    return bboxes * np.array([*scale_factors, *scale_factors, *[1] * (bboxes.shape[1] - 4)], dtype=float)
+    h, w = shape
+    scales = np.array([w, h, w, h], dtype=float)
+    if bboxes.shape[1] > 4:
+        extra = np.ones(bboxes.shape[1] - 4, dtype=float)
+        scales = np.concatenate([scales, extra])
+    # Vectorized scaling, avoid unpacking to tuple
+    # Removed unnecessary *-operation
+    return bboxes * scales
 
 
 def calculate_bbox_areas_in_pixels(bboxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
@@ -611,30 +615,34 @@ def check_bboxes(bboxes: np.ndarray) -> None:
         ValueError: If any bounding box is invalid.
 
     """
-    # Check if all values are in range [0, 1]
-    in_range = (bboxes[:, :4] >= 0) & (bboxes[:, :4] <= 1)
-    close_to_zero = np.isclose(bboxes[:, :4], 0)
-    close_to_one = np.isclose(bboxes[:, :4], 1)
-    valid_range = in_range | close_to_zero | close_to_one
+    # Check if all values are in range [0, 1], accounting for rounding errors
+    allowed_min = -1e-8
+    allowed_max = 1.0 + 1e-8
+    coords = bboxes[:, :4]
+    # Faster vectorized comparison
+    in_range = np.logical_and(coords >= allowed_min, coords <= allowed_max)
 
-    if not np.all(valid_range):
-        invalid_idx = np.where(~np.all(valid_range, axis=1))[0][0]
-        invalid_bbox = bboxes[invalid_idx]
-        invalid_coord = ["x_min", "y_min", "x_max", "y_max"][np.where(~valid_range[invalid_idx])[0][0]]
-        invalid_value = invalid_bbox[np.where(~valid_range[invalid_idx])[0][0]]
+    if not np.all(in_range):
+        # Find first invalid bbox and coordinate index
+        bad_row, bad_col = np.where(~in_range)
+        idx = bad_row[0]
+        cid = bad_col[0]
+        invalid_bbox = bboxes[idx]
+        invalid_coord = ["x_min", "y_min", "x_max", "y_max"][cid]
+        invalid_value = invalid_bbox[cid]
         raise ValueError(
             f"Expected {invalid_coord} for bbox {invalid_bbox} to be in the range [0.0, 1.0], got {invalid_value}.",
         )
 
     # Check if x_max > x_min and y_max > y_min
-    valid_order = (bboxes[:, 2] > bboxes[:, 0]) & (bboxes[:, 3] > bboxes[:, 1])
+    x_valid = bboxes[:, 2] > bboxes[:, 0]
+    y_valid = bboxes[:, 3] > bboxes[:, 1]
 
-    if not np.all(valid_order):
-        invalid_idx = np.where(~valid_order)[0][0]
-        invalid_bbox = bboxes[invalid_idx]
-        if invalid_bbox[2] <= invalid_bbox[0]:
+    if not np.all(x_valid & y_valid):
+        idx = np.where(~(x_valid & y_valid))[0][0]
+        invalid_bbox = bboxes[idx]
+        if not x_valid[idx]:
             raise ValueError(f"x_max is less than or equal to x_min for bbox {invalid_bbox}.")
-
         raise ValueError(f"y_max is less than or equal to y_min for bbox {invalid_bbox}.")
 
 
