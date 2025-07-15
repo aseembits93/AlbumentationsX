@@ -155,65 +155,65 @@ class OverlayElements(DualTransform):
         random_state: random.Random,
     ) -> dict[str, Any]:
         overlay_image = metadata["image"]
-        overlay_height, overlay_width = overlay_image.shape[:2]
-        image_height, image_width = img_shape[:2]
+        overlay_h, overlay_w = overlay_image.shape[:2]
+        img_h, img_w = img_shape[:2]
 
         if "bbox" in metadata:
             bbox = metadata["bbox"]
-            bbox_np = np.array([bbox])
+            bbox_np = np.empty((1, len(bbox)), dtype=float)
+            bbox_np[0, :] = bbox
             check_bboxes(bbox_np)
-            denormalized_bbox = denormalize_bboxes(bbox_np, img_shape[:2])[0]
+            denorm_bbox = denormalize_bboxes(bbox_np, img_shape[:2])[0]
+            x_min, y_min, x_max, y_max = map(int, denorm_bbox[:4])
 
-            x_min, y_min, x_max, y_max = (int(x) for x in denormalized_bbox[:4])
+            out_w = x_max - x_min
+            out_h = y_max - y_min
 
             if "mask" in metadata:
                 mask = metadata["mask"]
-                mask = cv2.resize(mask, (x_max - x_min, y_max - y_min), interpolation=cv2.INTER_NEAREST)
+                # cv2.resize expects (width, height)
+                mask = cv2.resize(mask, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
             else:
-                mask = np.ones((y_max - y_min, x_max - x_min), dtype=np.uint8)
+                mask = np.ones((out_h, out_w), dtype=np.uint8)
 
-            overlay_image = cv2.resize(overlay_image, (x_max - x_min, y_max - y_min), interpolation=cv2.INTER_AREA)
+            overlay_image = cv2.resize(overlay_image, (out_w, out_h), interpolation=cv2.INTER_AREA)
             offset = (y_min, x_min)
-
             if len(bbox) == LENGTH_RAW_BBOX and "bbox_id" in metadata:
-                bbox = [x_min, y_min, x_max, y_max, metadata["bbox_id"]]
+                bbox_out = [x_min, y_min, x_max, y_max, metadata["bbox_id"]]
             else:
-                bbox = (x_min, y_min, x_max, y_max, *bbox[4:])
+                bbox_out = (x_min, y_min, x_max, y_max, *bbox[4:])
         else:
-            if image_height < overlay_height or image_width < overlay_width:
-                overlay_image = cv2.resize(overlay_image, (image_width, image_height), interpolation=cv2.INTER_AREA)
-                overlay_height, overlay_width = overlay_image.shape[:2]
+            # Fast checks and fallback
+            if img_h < overlay_h or img_w < overlay_w:
+                overlay_image = cv2.resize(overlay_image, (img_w, img_h), interpolation=cv2.INTER_AREA)
+                overlay_h, overlay_w = overlay_image.shape[:2]
 
-            mask = metadata["mask"] if "mask" in metadata else np.ones_like(overlay_image, dtype=np.uint8)
+            mask = metadata["mask"] if "mask" in metadata else np.ones(overlay_image.shape[:2], dtype=np.uint8)
+            max_x_offset = img_w - overlay_w
+            max_y_offset = img_h - overlay_h
 
-            max_x_offset = image_width - overlay_width
-            max_y_offset = image_height - overlay_height
-
-            offset_x = random_state.randint(0, max_x_offset)
-            offset_y = random_state.randint(0, max_y_offset)
+            # Clamp for non-negative random range for small overlays
+            offset_x = 0 if max_x_offset == 0 else random_state.randint(0, max_x_offset)
+            offset_y = 0 if max_y_offset == 0 else random_state.randint(0, max_y_offset)
 
             offset = (offset_y, offset_x)
-
-            bbox = [
+            bbox_out = [
                 offset_x,
                 offset_y,
-                offset_x + overlay_width,
-                offset_y + overlay_height,
+                offset_x + overlay_w,
+                offset_y + overlay_h,
             ]
-
             if "bbox_id" in metadata:
-                bbox = [*bbox, metadata["bbox_id"]]
+                bbox_out = [*bbox_out, metadata["bbox_id"]]
 
         result = {
             "overlay_image": overlay_image,
             "overlay_mask": mask,
             "offset": offset,
-            "bbox": bbox,
+            "bbox": bbox_out,
         }
-
         if "mask_id" in metadata:
             result["mask_id"] = metadata["mask_id"]
-
         return result
 
     def get_params_dependent_on_data(self, params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
