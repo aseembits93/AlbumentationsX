@@ -417,10 +417,9 @@ def normalize_bboxes(bboxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
 
     """
     rows, cols = shape[:2]
-
-    normalized = bboxes.copy().astype(float)
-    normalized[:, [0, 2]] /= cols
-    normalized[:, [1, 3]] /= rows
+    # Avoid copy and do in-place float conversion + division
+    normalized = bboxes.astype(np.float32, copy=False)
+    normalized = np.divide(normalized, [cols, rows, cols, rows] + [1] * (bboxes.shape[1] - 4), dtype=np.float32)
     return normalized
 
 
@@ -439,10 +438,10 @@ def denormalize_bboxes(
         np.ndarray: Denormalized bounding boxes `[(x_min, y_min, x_max, y_max, ...)]`.
 
     """
-    scale_factors = (shape[1], shape[0])
-
-    # Vectorized scaling of bbox coordinates
-    return bboxes * np.array([*scale_factors, *scale_factors, *[1] * (bboxes.shape[1] - 4)], dtype=float)
+    rows, cols = shape[:2]
+    out = bboxes.astype(np.float32, copy=False)
+    out = np.multiply(out, [cols, rows, cols, rows] + [1] * (bboxes.shape[1] - 4), dtype=np.float32)
+    return out
 
 
 def calculate_bbox_areas_in_pixels(bboxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
