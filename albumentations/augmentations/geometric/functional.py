@@ -4131,3 +4131,11 @@ def d4_images(img: np.ndarray, group_member: Literal["e", "r90", "r180", "r270",
     """
     # Execute the appropriate transformation
     return D4_TRANSFORMATIONS_IMAGES[group_member](img)
+
+
+def erode_rect(img: np.ndarray, ksize: tuple[int, int]) -> np.ndarray:
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, ksize)
+    # Optimize as before
+    if not img.flags["C_CONTIGUOUS"]:
+        img = np.ascontiguousarray(img)
+    return cv2.erode(img, kernel, iterations=1)
