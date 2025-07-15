@@ -455,6 +455,9 @@ def rotation2d_matrix_to_euler_angles(matrix: np.ndarray, y_up: bool) -> float:
     y_up (bool): is Y axis looks up or down
 
     """
+    # Args:
+    # matrix (np.ndarray): Rotation matrix
+    # y_up (bool): is Y axis looks up or down
     if y_up:
         return np.arctan2(matrix[1, 0], matrix[0, 0])
     return np.arctan2(-matrix[1, 0], matrix[0, 0])
@@ -484,58 +487,63 @@ def perspective_keypoints(
         np.ndarray: Transformed keypoints array with same shape as input
 
     """
-    keypoints = keypoints.copy().astype(np.float32)
+    # Apply perspective transformation to keypoints.
+    # Args as above.
 
-    height, width = image_shape[:2]
+    # Only copy and convert if not float32 already; avoid unnecessary copying
+    if keypoints.dtype != np.float32:
+        keypoints = keypoints.astype(np.float32, copy=False)
 
-    x, y, z, angle, scale = (
-        keypoints[:, 0],
-        keypoints[:, 1],
-        keypoints[:, 2],
-        keypoints[:, 3],
-        keypoints[:, 4],
-    )
+    h, w = image_shape[:2]
+    nc = NUM_KEYPOINTS_COLUMNS_IN_ALBUMENTATIONS
+    num_kpts = keypoints.shape[0]
 
-    # Reshape keypoints for perspective transform
-    keypoint_vector = np.column_stack((x, y)).astype(np.float32).reshape(-1, 1, 2)
+    # Split keypoints
+    xy = keypoints[:, :2]  # shape (N,2)
+    z = keypoints[:, 2]  # shape (N,)
+    angle = keypoints[:, 3]  # shape (N,)
+    scale = keypoints[:, 4]  # shape (N,)
 
-    # Apply perspective transform
-    transformed_points = cv2.perspectiveTransform(keypoint_vector, matrix).squeeze()
+    # Prepare for cv2.perspectiveTransform (expects shape [N,1,2] float32)
+    # No need to copy if already correct type
+    # No need to use reshape(-1,1,2), just np.expand_dims
+    kpt_vec = xy[:, np.newaxis, :]
 
-    # Unsqueeze if we have a single keypoint
-    if transformed_points.ndim == 1:
-        transformed_points = transformed_points[np.newaxis, :]
+    # Perspective transform (result shape: [N,1,2])
+    transformed_xy = cv2.perspectiveTransform(kpt_vec, matrix)
+    # No need to squeeze; just index:
+    x_new = transformed_xy[:, 0, 0]
+    y_new = transformed_xy[:, 0, 1]
 
-    x, y = transformed_points[:, 0], transformed_points[:, 1]
+    # Update angle with the rotation part extracted from the 2x2 portion
+    rot_delta = rotation2d_matrix_to_euler_angles(matrix[:2, :2], y_up=True)
+    new_angle = angle + rot_delta
 
-    # Update angles
-    angle += rotation2d_matrix_to_euler_angles(matrix[:2, :2], y_up=True)
-
-    # Calculate scale factors
-    scale_x = np.sign(matrix[0, 0]) * np.sqrt(matrix[0, 0] ** 2 + matrix[0, 1] ** 2)
-    scale_y = np.sign(matrix[1, 1]) * np.sqrt(matrix[1, 0] ** 2 + matrix[1, 1] ** 2)
-    scale *= max(scale_x, scale_y)
+    # More efficient and precise scale extraction
+    sx = np.sign(matrix[0, 0]) * np.hypot(matrix[0, 0], matrix[0, 1])
+    sy = np.sign(matrix[1, 1]) * np.hypot(matrix[1, 0], matrix[1, 1])
+    new_scale = scale * max(sx, sy)
 
     if keep_size:
-        scale_x = width / max_width
-        scale_y = height / max_height
-        x *= scale_x
-        y *= scale_y
-        scale *= max(scale_x, scale_y)
+        sx = w / max_width
+        sy = h / max_height
+        x_new = x_new * sx
+        y_new = y_new * sy
+        new_scale = new_scale * max(sx, sy)
 
-    # Create the output array with unchanged z coordinate
-    transformed_keypoints = np.column_stack([x, y, z, angle, scale])
+    # Compose output array, preserve shape and dtype
+    out = np.empty((num_kpts, keypoints.shape[1]), dtype=np.float32)
+    out[:, 0] = x_new
+    out[:, 1] = y_new
+    out[:, 2] = z
+    out[:, 3] = new_angle
+    out[:, 4] = new_scale
 
-    # If there are additional columns, preserve them
-    if keypoints.shape[1] > NUM_KEYPOINTS_COLUMNS_IN_ALBUMENTATIONS:
-        return np.column_stack(
-            [
-                transformed_keypoints,
-                keypoints[:, NUM_KEYPOINTS_COLUMNS_IN_ALBUMENTATIONS:],
-            ],
-        )
+    # If there are additional columns, copy them efficiently at once
+    if keypoints.shape[1] > nc:
+        out[:, nc:] = keypoints[:, nc:]
 
-    return transformed_keypoints
+    return out
 
 
 def is_identity_matrix(matrix: np.ndarray) -> bool:
