@@ -143,11 +143,15 @@ def crop_keypoints_by_coords(
         np.ndarray: An array of cropped keypoints with the same shape as the input.
 
     """
-    x1, y1 = crop_coords[:2]
+    x1, y1 = crop_coords[0], crop_coords[1]
+    # Minimize memory allocation; avoid copy if not needed.
+    if x1 == 0 and y1 == 0:
+        return keypoints
 
     cropped_keypoints = keypoints.copy()
-    cropped_keypoints[:, 0] -= x1  # Adjust x coordinates
-    cropped_keypoints[:, 1] -= y1  # Adjust y coordinates
+    # Use in-place subtraction for fast adjustment
+    cropped_keypoints[:, 0] -= x1
+    cropped_keypoints[:, 1] -= y1
 
     return cropped_keypoints
 
