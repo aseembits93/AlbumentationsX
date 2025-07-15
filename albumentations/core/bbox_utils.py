@@ -15,7 +15,8 @@ from typing import Any, Literal
 import numpy as np
 
 from albumentations.augmentations.utils import handle_empty_array
-from albumentations.core.type_definitions import MONO_CHANNEL_DIMENSIONS, NUM_BBOXES_COLUMNS_IN_ALBUMENTATIONS
+from albumentations.core.type_definitions import (
+    MONO_CHANNEL_DIMENSIONS, NUM_BBOXES_COLUMNS_IN_ALBUMENTATIONS)
 
 from .utils import DataProcessor, Params
 
@@ -417,11 +418,9 @@ def normalize_bboxes(bboxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
 
     """
     rows, cols = shape[:2]
-
-    normalized = bboxes.copy().astype(float)
-    normalized[:, [0, 2]] /= cols
-    normalized[:, [1, 3]] /= rows
-    return normalized
+    # Fast normalization in one go: avoids a copy and two passes.
+    scale = np.array([cols, rows, cols, rows] + [1] * (bboxes.shape[1] - 4), dtype=float)
+    return bboxes.astype(float) / scale
 
 
 @handle_empty_array("bboxes")
@@ -439,10 +438,9 @@ def denormalize_bboxes(
         np.ndarray: Denormalized bounding boxes `[(x_min, y_min, x_max, y_max, ...)]`.
 
     """
-    scale_factors = (shape[1], shape[0])
-
-    # Vectorized scaling of bbox coordinates
-    return bboxes * np.array([*scale_factors, *scale_factors, *[1] * (bboxes.shape[1] - 4)], dtype=float)
+    # Only one broadcast mul needed, not per column-index + copy
+    scale = np.array([shape[1], shape[0], shape[1], shape[0]] + [1] * (bboxes.shape[1] - 4), dtype=float)
+    return bboxes * scale
 
 
 def calculate_bbox_areas_in_pixels(bboxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:

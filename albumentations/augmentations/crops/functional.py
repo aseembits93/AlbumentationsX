@@ -283,23 +283,29 @@ def crop_and_pad_bboxes(
     if len(bboxes) == 0:
         return bboxes
 
-    # Denormalize bboxes
-    denormalized_bboxes = denormalize_bboxes(bboxes, image_shape)
+    # Denormalize bboxes (allocates float array)
+    denorm = denormalize_bboxes(bboxes, image_shape)
 
+    # Efficiently compute the global XY (crop + pad) offset in one step, instead of repeated slicing
+    total_x_shift = 0
+    total_y_shift = 0
     if crop_params is not None:
-        crop_x, crop_y = crop_params[:2]
-        # Subtract crop values from x and y coordinates
-        denormalized_bboxes[:, [0, 2]] -= crop_x
-        denormalized_bboxes[:, [1, 3]] -= crop_y
-
+        total_x_shift -= crop_params[0]
+        total_y_shift -= crop_params[1]
     if pad_params is not None:
-        top, _, left, _ = pad_params
-        # Add pad values to x and y coordinates
-        denormalized_bboxes[:, [0, 2]] += left
-        denormalized_bboxes[:, [1, 3]] += top
+        total_x_shift += pad_params[2]  # left
+        total_y_shift += pad_params[0]  # top
+
+    # Apply sum of crop/pad at once (less slicing overhead)
+    if total_x_shift != 0:
+        denorm[:, 0] += total_x_shift
+        denorm[:, 2] += total_x_shift
+    if total_y_shift != 0:
+        denorm[:, 1] += total_y_shift
+        denorm[:, 3] += total_y_shift
 
     # Normalize bboxes to the result shape
-    return normalize_bboxes(denormalized_bboxes, result_shape)
+    return normalize_bboxes(denorm, result_shape)
 
 
 @handle_empty_array("keypoints")
