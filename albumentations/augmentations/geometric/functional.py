@@ -3660,10 +3660,13 @@ def bboxes_grid_shuffle(
 
 def create_shape_groups(tiles: np.ndarray) -> dict[tuple[int, int], list[int]]:
     """Groups tiles by their shape and stores the indices for each shape."""
+    # Vectorized computation of all shapes
+    shapes = tiles[:, [2, 3]] - tiles[:, [0, 1]]
+    # Convert shapes to tuples for use as dictionary keys
+    shapes_tuple = [tuple(shape) for shape in shapes]
     shape_groups = defaultdict(list)
-    for index, (start_y, start_x, end_y, end_x) in enumerate(tiles):
-        shape = (end_y - start_y, end_x - start_x)
-        shape_groups[shape].append(index)
+    for idx, shape in enumerate(shapes_tuple):
+        shape_groups[shape].append(idx)
     return shape_groups
 
 
