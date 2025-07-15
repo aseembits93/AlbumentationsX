@@ -560,6 +560,13 @@ def ensure_int_output(
         otherwise values remain as float.
 
     """
+    # Direct type comparison is faster than isinstance for builtins
+    if type(param) is int:
+        return (int(min_val), int(max_val))
+    # Floats can accept int as input with no change, so only convert if necessary
+    if type(param) is float:
+        return (float(min_val), float(max_val))
+    # Fallback for complex subclasses, preserving previous behavior
     return (int(min_val), int(max_val)) if isinstance(param, int) else (float(min_val), float(max_val))
 
 
