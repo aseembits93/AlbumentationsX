@@ -371,18 +371,20 @@ def volume_crop_yx(
         ValueError: If crop coordinates are invalid.
 
     """
-    _, height, width = volume.shape[:3]
+    shape = volume.shape
+    height = shape[1]
+    width = shape[2]
+
     if x_max <= x_min or y_max <= y_min:
+        # Only create the error string if needed
         raise ValueError(
-            "Crop coordinates must satisfy min < max. Got: "
-            f"(x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max})",
+            f"Crop coordinates must satisfy min < max. Got: (x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max})",
         )
 
     if x_min < 0 or y_min < 0 or x_max > width or y_max > height:
+        # Only create the error string if needed
         raise ValueError(
-            "Crop coordinates must be within image dimensions (H, W). Got: "
-            f"(x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}) "
-            f"for volume shape {volume.shape[:3]}",
+            f"Crop coordinates must be within image dimensions (H, W). Got: (x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}) for volume shape ({shape[0]}, {height}, {width})",
         )
 
     # Crop along H (axis 1) and W (axis 2)
