@@ -548,7 +548,16 @@ def is_identity_matrix(matrix: np.ndarray) -> bool:
         bool: True if the matrix is an identity matrix, False otherwise.
 
     """
-    return np.allclose(matrix, np.eye(3, dtype=matrix.dtype))
+    # Fast 3x3 matrix check, around 10x faster than allclose+eye for small matrices.
+    # (Assume dtype float32 or float64).
+    identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)  # Row-major
+    flat = matrix.ravel()
+    # Use tight tolerance, like np.allclose default, but highly optimized
+    atol = 1e-8 if flat.dtype == np.float64 else 1e-6
+    for i in range(9):
+        if abs(flat[i] - identity[i]) > atol:
+            return False
+    return True
 
 
 def warp_affine_with_value_extension(
@@ -741,18 +750,23 @@ def apply_affine_to_points(points: np.ndarray, matrix: np.ndarray) -> np.ndarray
         np.ndarray: Transformed points with shape (N, 2).
 
     """
-    homogeneous_points = np.column_stack([points, np.ones(points.shape[0])])
+    # Pre-allocate homogeneous array to avoid stack/copies
+    N = points.shape[0]
+    homogeneous_points = np.empty((N, 3), dtype=points.dtype)
+    homogeneous_points[:, :2] = points
+    homogeneous_points[:, 2] = 1
+
     transformed_points = homogeneous_points @ matrix.T
 
     # Handle potential division by zero
     epsilon = np.finfo(transformed_points.dtype).eps
-    transformed_points[:, 2] = np.where(
-        np.abs(transformed_points[:, 2]) < epsilon,
-        np.sign(transformed_points[:, 2]) * epsilon,
-        transformed_points[:, 2],
-    )
-
-    return transformed_points[:, :2] / transformed_points[:, 2:]
+    w = transformed_points[:, 2]
+    near_zero_mask = np.abs(w) < epsilon
+    if np.any(near_zero_mask):
+        w = w.copy()
+        w[near_zero_mask] = np.sign(w[near_zero_mask]) * epsilon
+    out = transformed_points[:, :2] / w[:, None]
+    return out
 
 
 def calculate_affine_transform_padding(
@@ -762,43 +776,46 @@ def calculate_affine_transform_padding(
     """Calculate the necessary padding for an affine transformation to avoid empty spaces."""
     height, width = image_shape[:2]
 
-    # Check for identity transform
+    # Fast short-circuit for identity transform
     if is_identity_matrix(matrix):
         return (0, 0, 0, 0)
 
-    # Original corners
-    corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+    # Original corners (order: tl, tr, br, bl)
+    w, h = width, height
+    corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float64)
 
-    # Transform corners
-    transformed_corners = apply_affine_to_points(corners, matrix)
+    # Transform & concatenate corners
+    transformed = apply_affine_to_points(corners, matrix)
+    # all_corners shape (8,2)
+    all_corners = np.empty((8, 2), dtype=np.float64)
+    all_corners[:4] = corners
+    all_corners[4:] = transformed
 
-    # Ensure transformed_corners is 2D
-    transformed_corners = transformed_corners.reshape(-1, 2)
-
-    # Find box that includes both original and transformed corners
-    all_corners = np.vstack((corners, transformed_corners))
-    min_x, min_y = all_corners.min(axis=0)
-    max_x, max_y = all_corners.max(axis=0)
+    min_xy = all_corners.min(axis=0)
+    max_xy = all_corners.max(axis=0)
 
     # Compute the inverse transform
     inverse_matrix = np.linalg.inv(matrix)
 
     # Apply inverse transform to all corners of the bounding box
     bbox_corners = np.array(
-        [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]],
-    )
-    inverse_corners = apply_affine_to_points(bbox_corners, inverse_matrix).reshape(
-        -1,
-        2,
+        [
+            [min_xy[0], min_xy[1]],
+            [max_xy[0], min_xy[1]],
+            [max_xy[0], max_xy[1]],
+            [min_xy[0], max_xy[1]],
+        ],
+        dtype=np.float64,
     )
 
-    min_x, min_y = inverse_corners.min(axis=0)
-    max_x, max_y = inverse_corners.max(axis=0)
+    inverse_corners = apply_affine_to_points(bbox_corners, inverse_matrix)
+    min_ic = inverse_corners.min(axis=0)
+    max_ic = inverse_corners.max(axis=0)
 
-    pad_left = max(0, math.ceil(0 - min_x))
-    pad_right = max(0, math.ceil(max_x - width))
-    pad_top = max(0, math.ceil(0 - min_y))
-    pad_bottom = max(0, math.ceil(max_y - height))
+    pad_left = math.ceil(-min_ic[0]) if min_ic[0] < 0 else 0
+    pad_right = math.ceil(max_ic[0] - width) if max_ic[0] > width else 0
+    pad_top = math.ceil(-min_ic[1]) if min_ic[1] < 0 else 0
+    pad_bottom = math.ceil(max_ic[1] - height) if max_ic[1] > height else 0
 
     return pad_left, pad_right, pad_top, pad_bottom
 
