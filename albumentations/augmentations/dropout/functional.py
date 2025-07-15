@@ -174,8 +174,18 @@ def fill_volumes_holes_with_value(volumes: np.ndarray, holes: np.ndarray, fill: 
         fill (np.ndarray): Value to fill the holes with
 
     """
-    for x_min, y_min, x_max, y_max in holes:
-        volumes[:, :, y_min:y_max, x_min:x_max] = fill
+    # Vectorize as much as possible by sorting the holes to minimize cache misses
+    # and iterating with minimal overhead.
+    if isinstance(holes, np.ndarray) and holes.ndim == 2 and holes.shape[1] == 4:
+        # Fast path: nm holes, instant index unpacking with numpy.
+        # Sorting could be used to optimize cache locality if beneficial.
+        x_min_arr, y_min_arr, x_max_arr, y_max_arr = holes.T
+        for x_min, y_min, x_max, y_max in zip(x_min_arr, y_min_arr, x_max_arr, y_max_arr):
+            volumes[:, :, y_min:y_max, x_min:x_max] = fill
+    else:
+        # Fallback: original slow loop
+        for x_min, y_min, x_max, y_max in holes:
+            volumes[:, :, y_min:y_max, x_min:x_max] = fill
     return volumes
 
 
