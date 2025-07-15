@@ -2176,12 +2176,27 @@ def flip_bboxes(
         np.ndarray: Flipped bounding boxes.
 
     """
+    if not (flip_horizontal or flip_vertical):
+        # No flip, return original reference for best performance.
+        return bboxes
+
     rows, cols = image_shape[:2]
+    # Fastest to avoid copy if neither flip, but if we need, make a copy once.
     flipped_bboxes = bboxes.copy()
+
     if flip_horizontal:
-        flipped_bboxes[:, [0, 2]] = cols - flipped_bboxes[:, [2, 0]]
+        # Compute new coordinates in one step, no temporary slices.
+        x_min = bboxes[:, 0]
+        x_max = bboxes[:, 2]
+        flipped_bboxes[:, 0] = cols - x_max
+        flipped_bboxes[:, 2] = cols - x_min
+
     if flip_vertical:
-        flipped_bboxes[:, [1, 3]] = rows - flipped_bboxes[:, [3, 1]]
+        y_min = bboxes[:, 1]
+        y_max = bboxes[:, 3]
+        flipped_bboxes[:, 1] = rows - y_max
+        flipped_bboxes[:, 3] = rows - y_min
+
     return flipped_bboxes
 
 
