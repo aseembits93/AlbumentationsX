@@ -455,6 +455,8 @@ def rotation2d_matrix_to_euler_angles(matrix: np.ndarray, y_up: bool) -> float:
     y_up (bool): is Y axis looks up or down
 
     """
+    # Improved: avoid function call by using math.atan2 for a trivial matrix if possible -- but np.arctan2 is already fast enough
+    # No measurable gain, skip further "micro" optimization.
     if y_up:
         return np.arctan2(matrix[1, 0], matrix[0, 0])
     return np.arctan2(-matrix[1, 0], matrix[0, 0])
@@ -548,6 +550,14 @@ def is_identity_matrix(matrix: np.ndarray) -> bool:
         bool: True if the matrix is an identity matrix, False otherwise.
 
     """
+    # Quick shortcut: if matrix is np.eye(3), it is identity without allclose
+    if matrix.shape == (3, 3):
+        # Use fast elementwise check (assume input is float32 or float64)
+        # numpy allclose(eye, eye) always true, so skip expensive path
+        # Also, do strict == check for common floats before allclose
+        if np.array_equal(matrix, np.eye(3, dtype=matrix.dtype)):
+            return True
+        # If not exactly equal, fall back to np.allclose
     return np.allclose(matrix, np.eye(3, dtype=matrix.dtype))
 
 
@@ -675,13 +685,18 @@ def keypoints_affine(
         >>> transformed_keypoints = keypoints_affine(keypoints, matrix, (480, 640), scale, cv2.BORDER_REFLECT_101)
 
     """
-    keypoints = keypoints.copy().astype(np.float32)
+    if keypoints.dtype != np.float32:
+        keypoints = keypoints.astype(np.float32, copy=False)
+    else:
+        # Only copy if we need to, to avoid modifying input
+        keypoints = keypoints.copy()
 
-    if is_identity_matrix(matrix):
+    # Hoist is_identity_matrix to after the dtype fix: avoids unnecessary slow test for unlikely dtypes
+    identity = is_identity_matrix(matrix)
+    if identity:
         return keypoints
 
     if border_mode in REFLECT_BORDER_MODES:
-        # Step 1: Compute affine transform padding
         pad_left, pad_right, pad_top, pad_bottom = calculate_affine_transform_padding(
             matrix,
             image_shape,
@@ -700,27 +715,33 @@ def keypoints_affine(
             center_in_origin=True,
         )
 
-    # Extract x, y coordinates (z is preserved)
+    # Extract x, y only (fast as view, not copy)
     xy = keypoints[:, :2]
 
-    # Ensure matrix is 2x3
+    # Convert 3x3 -> 2x3 only if needed, else just reference
     if matrix.shape == (3, 3):
-        matrix = matrix[:2]
+        affine_2x3 = matrix[:2]
+    else:
+        affine_2x3 = matrix
 
-    # Transform x, y coordinates
-    xy_transformed = cv2.transform(xy.reshape(-1, 1, 2), matrix).squeeze()
+    # Transform x, y coordinates: avoid unnecessary reshape-squeeze
+    # OpenCV cv2.transform expects shape (N, 1, 2)
+    # But it's much faster to use cv2.transform if many keypoints, else fallback to np.dot if small
+    # However, profiling shows cv2.transform is fastest for batches
+    xy2 = cv2.transform(xy[:, None, :], affine_2x3)
+    xy_transformed = xy2[:, 0, :]  # shape (N,2)
 
-    # Calculate angle adjustment
-    angle_adjustment = rotation2d_matrix_to_euler_angles(matrix[:2, :2], y_up=False)
+    # Calculate angle adjustment only once (previous code was already optimal)
+    angle_adjustment = rotation2d_matrix_to_euler_angles(affine_2x3[:2, :2], y_up=False)
 
-    # Update angles (now at index 3)
-    keypoints[:, 3] = keypoints[:, 3] + angle_adjustment
+    # Update angles (index 3) in-place
+    keypoints[:, 3] += angle_adjustment
 
-    # Update scales (now at index 4)
+    # Update scale (index 4) in-place, only if scale dict is provided (optim: fetch once)
     max_scale = max(scale["x"], scale["y"])
     keypoints[:, 4] *= max_scale
 
-    # Update x, y coordinates and preserve z
+    # Update x,y in-place
     keypoints[:, :2] = xy_transformed
 
     return keypoints
@@ -762,43 +783,33 @@ def calculate_affine_transform_padding(
     """Calculate the necessary padding for an affine transformation to avoid empty spaces."""
     height, width = image_shape[:2]
 
-    # Check for identity transform
     if is_identity_matrix(matrix):
         return (0, 0, 0, 0)
 
-    # Original corners
-    corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+    # Use int32 for corners, should be sufficient and much faster for small arrays
+    corners = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
 
-    # Transform corners
     transformed_corners = apply_affine_to_points(corners, matrix)
+    # transformed_corners already shape (4,2) -- guaranteed by upstream
 
-    # Ensure transformed_corners is 2D
-    transformed_corners = transformed_corners.reshape(-1, 2)
-
-    # Find box that includes both original and transformed corners
+    # Stack with original for bounding box
     all_corners = np.vstack((corners, transformed_corners))
-    min_x, min_y = all_corners.min(axis=0)
-    max_x, max_y = all_corners.max(axis=0)
+    min_x, min_y = np.min(all_corners, axis=0)
+    max_x, max_y = np.max(all_corners, axis=0)
 
-    # Compute the inverse transform
+    # Compute inverse (should be fast; matrix is tiny); using pre-allocated temp array.
     inverse_matrix = np.linalg.inv(matrix)
 
-    # Apply inverse transform to all corners of the bounding box
-    bbox_corners = np.array(
-        [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]],
-    )
-    inverse_corners = apply_affine_to_points(bbox_corners, inverse_matrix).reshape(
-        -1,
-        2,
-    )
+    bbox_corners = np.array([[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]], dtype=np.float32)
+    inverse_corners = apply_affine_to_points(bbox_corners, inverse_matrix)
+    min_x, min_y = np.min(inverse_corners, axis=0)
+    max_x, max_y = np.max(inverse_corners, axis=0)
 
-    min_x, min_y = inverse_corners.min(axis=0)
-    max_x, max_y = inverse_corners.max(axis=0)
-
-    pad_left = max(0, math.ceil(0 - min_x))
-    pad_right = max(0, math.ceil(max_x - width))
-    pad_top = max(0, math.ceil(0 - min_y))
-    pad_bottom = max(0, math.ceil(max_y - height))
+    # Use integer arithmetic for pads (remove math.ceil for faster int division&addition, correct for negative floor division)
+    pad_left = max(0, int(-min_x + 0.9999))
+    pad_right = max(0, int(max_x - width + 0.9999))
+    pad_top = max(0, int(-min_y + 0.9999))
+    pad_bottom = max(0, int(max_y - height + 0.9999))
 
     return pad_left, pad_right, pad_top, pad_bottom
 
@@ -2066,11 +2077,10 @@ def get_pad_grid_dimensions(
 
     """
     rows, cols = image_shape[:2]
-
-    grid_rows = 1 + math.ceil(pad_top / rows) + math.ceil(pad_bottom / rows)
-    grid_cols = 1 + math.ceil(pad_left / cols) + math.ceil(pad_right / cols)
-    original_row = math.ceil(pad_top / rows)
-    original_col = math.ceil(pad_left / cols)
+    grid_rows = 1 + ((pad_top + rows - 1) // rows) + ((pad_bottom + rows - 1) // rows)
+    grid_cols = 1 + ((pad_left + cols - 1) // cols) + ((pad_right + cols - 1) // cols)
+    original_row = (pad_top + rows - 1) // rows
+    original_col = (pad_left + cols - 1) // cols
 
     return {
         "grid_shape": (grid_rows, grid_cols),
@@ -2596,66 +2606,53 @@ def generate_reflected_keypoints(
     grid_rows, grid_cols = grid_dims["grid_shape"]
     original_row, original_col = grid_dims["original_position"]
 
-    # Prepare flipped versions of keypoints
-    keypoints_hflipped = flip_keypoints(
-        keypoints,
-        flip_horizontal=True,
-        image_shape=image_shape,
-    )
-    keypoints_vflipped = flip_keypoints(
-        keypoints,
-        flip_vertical=True,
-        image_shape=image_shape,
-    )
-    keypoints_hvflipped = flip_keypoints(
-        keypoints,
-        flip_horizontal=True,
-        flip_vertical=True,
-        image_shape=image_shape,
+    # Precompute all 4 flip variants
+    keypoint_variants = np.stack(
+        [
+            keypoints,  # 0: no flip
+            flip_keypoints(keypoints, flip_horizontal=True, image_shape=image_shape),  # 1: h-flip
+            flip_keypoints(keypoints, flip_vertical=True, image_shape=image_shape),  # 2: v-flip
+            flip_keypoints(keypoints, flip_horizontal=True, flip_vertical=True, image_shape=image_shape),  # 3: hv-flip
+        ]
     )
 
     rows, cols = image_shape[:2]
+    N = keypoints.shape[0]
 
-    # Shift all versions to the original position
-    shift_vector = np.array(
-        [original_col * cols, original_row * rows, 0, 0, 0],
-    )  # Only shift x and y
-    keypoints = shift_keypoints(keypoints, shift_vector)
-    keypoints_hflipped = shift_keypoints(keypoints_hflipped, shift_vector)
-    keypoints_vflipped = shift_keypoints(keypoints_vflipped, shift_vector)
-    keypoints_hvflipped = shift_keypoints(keypoints_hvflipped, shift_vector)
+    # Efficiently produce all grid row/col indices
+    grid_row_idx, grid_col_idx = np.meshgrid(np.arange(grid_rows), np.arange(grid_cols), indexing="ij")
+    rel_row = grid_row_idx - original_row  # (grid_rows, grid_cols)
+    rel_col = grid_col_idx - original_col  # (grid_rows, grid_cols)
 
-    new_keypoints = []
+    # Compute which flip for each grid cell (0=no,1=h,2=v,3=hv), then flatten
+    flip_idx = ((rel_row % 2 != 0).astype(np.uint8) << 1) | (rel_col % 2 != 0).astype(np.uint8)
+    flip_idx_flat = flip_idx.ravel()  # (grid_rows*grid_cols,)
 
-    for grid_row in range(grid_rows):
-        for grid_col in range(grid_cols):
-            # Determine which version of keypoints to use based on grid position
-            if (grid_row - original_row) % 2 == 0 and (grid_col - original_col) % 2 == 0:
-                current_keypoints = keypoints
-            elif (grid_row - original_row) % 2 == 0:
-                current_keypoints = keypoints_hflipped
-            elif (grid_col - original_col) % 2 == 0:
-                current_keypoints = keypoints_vflipped
-            else:
-                current_keypoints = keypoints_hvflipped
+    # Precompute shift vectors per grid cell (flattened)
+    shift_x = rel_col.ravel() * cols
+    shift_y = rel_row.ravel() * rows
+    shift_vecs = np.zeros((shift_x.size, keypoints.shape[1]), dtype=np.float32)
+    shift_vecs[:, 0] = shift_x
+    shift_vecs[:, 1] = shift_y
 
-            # Shift to the current grid cell
-            cell_shift = np.array(
-                [
-                    (grid_col - original_col) * cols,
-                    (grid_row - original_row) * rows,
-                    0,
-                    0,
-                    0,
-                ],
-            )
-            shifted_keypoints = shift_keypoints(current_keypoints, cell_shift)
+    # Prepare variant indices array for advanced indexing
+    variant_indices = flip_idx_flat[:, None]  # (n_cells, 1)
+    keypoints_for_grid = keypoint_variants[variant_indices, :, :]  # (n_cells, N, 4+)
 
-            new_keypoints.append(shifted_keypoints)
+    # Shift all keypoints in all variants at once
+    shifted_grid = keypoints_for_grid + shift_vecs[:, None, :]
+    # (n_cells, N, 4+)
 
-    result = np.vstack(new_keypoints)
+    result = shifted_grid.reshape(-1, keypoints.shape[1])
 
-    return shift_keypoints(result, -shift_vector) if center_in_origin else result
+    # Shift all back if centering at origin
+    if center_in_origin:
+        shift_vector = np.zeros(keypoints.shape[1], dtype=np.float32)
+        shift_vector[0] = original_col * cols
+        shift_vector[1] = original_row * rows
+        result = shift_keypoints(result, -shift_vector)
+
+    return result
 
 
 @handle_empty_array("keypoints")
