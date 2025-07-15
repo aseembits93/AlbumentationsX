@@ -106,22 +106,30 @@ def bboxes_d4(
         ValueError: If an invalid group member is specified.
 
     """
-    transformations = {
-        "e": lambda x: x,  # Identity transformation
-        "r90": lambda x: bboxes_rot90(x, 1),  # Rotate 90 degrees
-        "r180": lambda x: bboxes_rot90(x, 2),  # Rotate 180 degrees
-        "r270": lambda x: bboxes_rot90(x, 3),  # Rotate 270 degrees
-        "v": lambda x: bboxes_vflip(x),  # Vertical flip
-        "hvt": lambda x: bboxes_transpose(
-            bboxes_rot90(x, 2),
-        ),  # Reflect over anti-diagonal
-        "h": lambda x: bboxes_hflip(x),  # Horizontal flip
-        "t": lambda x: bboxes_transpose(x),  # Transpose (reflect over main diagonal)
-    }
+    # Use direct control flow for group_member to reduce function call/dict overhead.
+    if group_member == "e":
+        return bboxes
 
-    # Execute the appropriate transformation
-    if group_member in transformations:
-        return transformations[group_member](bboxes)
+    if group_member == "r90":
+        return bboxes_rot90(bboxes, 1)
+
+    if group_member == "r180":
+        return bboxes_rot90(bboxes, 2)
+
+    if group_member == "r270":
+        return bboxes_rot90(bboxes, 3)
+
+    if group_member == "v":
+        return bboxes_vflip(bboxes)
+
+    if group_member == "hvt":
+        return bboxes_transpose(bboxes_rot90(bboxes, 2))
+
+    if group_member == "h":
+        return bboxes_hflip(bboxes)
+
+    if group_member == "t":
+        return bboxes_transpose(bboxes)
 
     raise ValueError(f"Invalid group member: {group_member}")
 
