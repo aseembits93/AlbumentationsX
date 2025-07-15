@@ -39,6 +39,13 @@ from albumentations.core.type_definitions import (
     REFLECT_BORDER_MODES,
 )
 
+"""Functional implementations of geometric image transformations.
+
+This module provides low-level functions for geometric operations such as rotation,
+resizing, flipping, perspective transforms, and affine transformations on images,
+bounding boxes and keypoints.
+"""
+
 PAIR = 2
 
 ROT90_180_FACTOR = 2
@@ -1593,6 +1600,10 @@ def pad_with_params(
         np.ndarray: Padded image.
 
     """
+    # Fast path: If no padding required, return original image
+    if not (h_pad_top or h_pad_bottom or w_pad_left or w_pad_right):
+        return img
+
     pad_fn = maybe_process_in_chunks(
         copy_make_border_with_value_extension,
         top=h_pad_top,
