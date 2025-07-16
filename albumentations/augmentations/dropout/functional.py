@@ -781,32 +781,43 @@ def mask_dropout_keypoints(
         np.ndarray: Filtered keypoints
 
     """
-    # Ensure dropout_mask is 2D
-    if dropout_mask.ndim > 2:
-        if dropout_mask.shape[0] == 1:  # Shape is (1, H, W)
-            dropout_mask = dropout_mask.squeeze(0)
-        elif dropout_mask.shape[-1] <= 4:  # Shape is (H, W, C)
+    # Efficient dropout_mask reduction
+    s = dropout_mask.shape
+    ndim = dropout_mask.ndim
+    if ndim > 2:
+        if s[0] == 1:
+            dropout_mask = dropout_mask[0]
+        elif s[-1] <= 4:
             dropout_mask = np.any(dropout_mask, axis=-1)
-        else:  # Shape is (C, H, W)
+        else:
             dropout_mask = np.any(dropout_mask, axis=0)
 
-    # Get coordinates as integers
-    coords = keypoints[:, :2].astype(int)
+    # Only access shape once for efficiency
+    h, w = dropout_mask.shape
 
-    # Filter out keypoints that are outside the mask dimensions
-    valid_mask = (
-        (coords[:, 0] >= 0)
-        & (coords[:, 0] < dropout_mask.shape[1])
-        & (coords[:, 1] >= 0)
-        & (coords[:, 1] < dropout_mask.shape[0])
-    )
+    # Avoid astype(int) for uint8 or int inputs (assume coords are float, so cast using .astype(np.intp) for indexing)
+    coords = keypoints[:, :2]
+    coords_int = coords.astype(np.intp, copy=False)
 
-    # For valid keypoints, check if they fall on non-dropped pixels
-    if np.any(valid_mask):
-        valid_coords = coords[valid_mask]
-        valid_mask[valid_mask] = ~dropout_mask[valid_coords[:, 1], valid_coords[:, 0]]
+    # Flat boolean mask for all keypoints: initialize to False
+    keep = np.zeros(len(keypoints), dtype=bool)
 
-    return keypoints[valid_mask]
+    # Get coords
+    x, y = coords_int[:, 0], coords_int[:, 1]
+
+    # Efficiently mask using np.logical_and.reduce
+    in_bounds = (x >= 0) & (x < w) & (y >= 0) & (y < h)
+
+    indices = np.nonzero(in_bounds)[0]
+    if indices.size > 0:
+        # Only compute the mask for keypoints in bounds
+        xi = x[indices]
+        yi = y[indices]
+        # Use ~dropout_mask[...] directly (vectorized), avoid double boolean logic
+        not_dropped = ~dropout_mask[yi, xi]
+        keep[indices] = not_dropped
+
+    return keypoints[keep]
 
 
 def label(mask: np.ndarray, return_num: bool = False, connectivity: int = 2) -> np.ndarray | tuple[np.ndarray, int]:
