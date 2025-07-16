@@ -147,7 +147,7 @@ def repeat_if_scalar(value: tuple[float, float] | float) -> tuple[float, float]:
         tuple[float, float]: If input is scalar, returns (value, value), otherwise returns input unchanged.
 
     """
-    return (value, value) if isinstance(value, (int, float)) else value
+    return (value, value) if isinstance(value, _NUMERIC_TYPES) else value
 
 
 T = TypeVar("T", int, float)
@@ -237,3 +237,5 @@ OnePlusIntNonDecreasingRangeType = Annotated[
     AfterValidator(nondecreasing),
     AfterValidator(float2int),
 ]
+
+_NUMERIC_TYPES = (int, float)
