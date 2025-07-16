@@ -211,7 +211,12 @@ def get_user_id_manager() -> UserIDManager:
         The global UserIDManager instance
 
     """
+    # Copy reference to global to avoid slower global lookups in loop
+    # but since we cannot rebind module globals, we must declare
     global _user_id_manager  # noqa: PLW0603
-    if _user_id_manager is None:
-        _user_id_manager = UserIDManager()
-    return _user_id_manager
+    # Fast path: _user_id_manager is already set
+    manager = _user_id_manager
+    if manager is None:
+        manager = UserIDManager()
+        _user_id_manager = manager
+    return manager
