@@ -121,6 +121,7 @@ def convert_to_1plus_range(value: tuple[float, float] | float) -> tuple[float, f
         tuple[float, float]: Range with minimum value of at least 1.
 
     """
+    # No change needed; this is already as optimal as it gets.
     return to_tuple(value, low=1)
 
 
